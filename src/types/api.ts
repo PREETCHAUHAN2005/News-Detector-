@@ -23,8 +23,9 @@ export interface EvidenceDTO {
   speaker?: string | null;
   context?: string | null;
   sourceId?: string | null;
-  /** claim∩statement terms (engine TF-IDF, JSON string from DB or array) — excerpt highlights */
-  highlights?: string | string[] | null;
+  /** claim∩statement terms (engine TF-IDF, JSON string from DB or array) — excerpt
+   *  highlights. Engine rows persist [{"term","idf"}]; legacy rows are string[]. */
+  highlights?: string | string[] | Array<{ term: string; idf?: number }> | null;
   /** joined trusted-source registry row (BR-03) — present in dossier responses */
   source?: {
     id?: string;

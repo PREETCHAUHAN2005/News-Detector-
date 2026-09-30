@@ -8,7 +8,12 @@
 import { useMemo, useState } from "react";
 import { BadgeCheck, Check, Copy, ExternalLink, Highlighter, Quote, ShieldCheck, UserRound } from "lucide-react";
 import type { EvidenceDTO } from "@/types/api";
-import { effectiveHighlightTerms, normalizeHighlights, segmentHighlighted } from "@/lib/highlight";
+import {
+  effectiveHighlightDetails,
+  normalizeHighlightDetails,
+  segmentHighlighted,
+  type HighlightDetail,
+} from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
 const RATING_STYLE: Record<string, string> = {
@@ -87,6 +92,28 @@ function SourceChip({ source }: { source: NonNullable<EvidenceDTO["source"]> }) 
   );
 }
 
+/** Format one weighted term as a compact mono chip (top terms row). */
+function TermChip({ detail, rank }: { detail: HighlightDetail; rank: number }) {
+  const weight = detail.idf;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded border border-emerald-500/20 bg-emerald-500/5 px-1.5 py-0.5 font-mono text-[10px] leading-none text-emerald-200/90"
+      title={
+        weight !== undefined
+          ? `"${detail.term}" — IDF ${weight.toFixed(2)} · retrieval driver #${rank}`
+          : `"${detail.term}" — lexical overlap (legacy row)`
+      }
+    >
+      {detail.term}
+      {weight !== undefined && (
+        <span className="text-[9px] font-semibold leading-none text-emerald-400/80 tabular-nums">
+          {weight.toFixed(1)}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function EvidenceCard({
   evidence,
   claimText,
@@ -99,15 +126,21 @@ export function EvidenceCard({
 }) {
   const [copied, setCopied] = useState(false);
 
-  const highlightTerms = useMemo(
-    () => (claimText ? effectiveHighlightTerms(evidence.highlights, claimText, evidence.excerpt) : []),
+  const highlightDetails = useMemo(
+    () =>
+      claimText
+        ? effectiveHighlightDetails(evidence.highlights, claimText, evidence.excerpt)
+        : [],
     [evidence.highlights, evidence.excerpt, claimText]
   );
   const excerptSegments = useMemo(
-    () => segmentHighlighted(evidence.excerpt, highlightTerms),
-    [evidence.excerpt, highlightTerms]
+    () => segmentHighlighted(evidence.excerpt, highlightDetails),
+    [evidence.excerpt, highlightDetails]
   );
-  const usedStored = highlightTerms.length > 0 && normalizeHighlights(evidence.highlights).length > 0;
+  const usedStored =
+    highlightDetails.length > 0 && normalizeHighlightDetails(evidence.highlights).length > 0;
+  const hasWeights = highlightDetails.some((d) => d.idf !== undefined);
+  const topTerms = highlightDetails.slice(0, 4);
 
   async function copyCitation(event: React.MouseEvent<HTMLButtonElement>): Promise<void> {
     // the card itself is a link — keep the click on the button local
@@ -200,7 +233,13 @@ export function EvidenceCard({
           seg.match ? (
             <mark
               key={i}
-              title="Claim term that drove this retrieval (TF-IDF match)"
+              title={
+                seg.idf !== undefined
+                  ? `“${seg.term}” — TF-IDF retrieval driver (IDF ${seg.idf.toFixed(2)}, rank #${
+                      highlightDetails.findIndex((d) => d.term === seg.term) + 1
+                    } of ${highlightDetails.length})`
+                  : `“${seg.term}” — claim term that drove this retrieval (lexical match)`
+              }
               className="cursor-help rounded-[3px] bg-emerald-500/15 px-0.5 font-medium text-emerald-200 underline-offset-2 transition-colors hover:bg-emerald-500/30 hover:text-emerald-100"
             >
               {seg.text}
@@ -210,18 +249,37 @@ export function EvidenceCard({
           )
         )}
       </p>
-      {highlightTerms.length > 0 && !compact && (
-        <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
-          <Highlighter className="size-3 shrink-0 text-emerald-400/70" aria-hidden />
-          <span className="truncate">
-            {highlightTerms.length} matched claim {highlightTerms.length === 1 ? "term" : "terms"}
-            <span className="text-zinc-600">
-              {" "}
-              ·{" "}
-              {usedStored ? "engine TF-IDF match" : "lexical overlap"}
+      {highlightDetails.length > 0 && !compact && (
+        <div className="mt-1.5 space-y-1.5">
+          <p className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+            <Highlighter className="size-3 shrink-0 text-emerald-400/70" aria-hidden />
+            <span className="truncate">
+              {highlightDetails.length} matched claim{" "}
+              {highlightDetails.length === 1 ? "term" : "terms"}
+              <span className="text-zinc-600">
+                {" "}
+                ·{" "}
+                {usedStored
+                  ? hasWeights
+                    ? "engine TF-IDF · ranked by IDF weight"
+                    : "engine TF-IDF match"
+                  : "lexical overlap"}
+              </span>
             </span>
-          </span>
-        </p>
+          </p>
+          {topTerms.length > 0 && (
+            <p className="flex flex-wrap items-center gap-1" aria-label="Top matched terms by retrieval weight">
+              {topTerms.map((d, i) => (
+                <TermChip key={d.term} detail={d} rank={i + 1} />
+              ))}
+              {highlightDetails.length > topTerms.length && (
+                <span className="font-mono text-[10px] text-zinc-600">
+                  +{highlightDetails.length - topTerms.length} more
+                </span>
+              )}
+            </p>
+          )}
+        </div>
       )}
       {(evidence.speaker || evidence.context) && !compact && (
         <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">

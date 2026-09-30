@@ -81,6 +81,28 @@ export function fetchAnalysis(id: string) {
   return jsonFetch<{ analysis: AnalysisDTO }>(`/api/analyses/${id}`);
 }
 
+export interface SimilarClaimDTO {
+  claimId: string;
+  analysisId: string;
+  text: string;
+  /** human-confirmed label from the prior review */
+  finalLabel: string;
+  /** char-channel cosine similarity (advisory — not the BR-08 reuse gate) */
+  similarity: number;
+  reviewedAt: string;
+  reviewerName: string | null;
+}
+
+export interface SimilarAnalysesResponse {
+  matches: SimilarClaimDTO[];
+  /** how many human-verified claims were checked — powers the reassurance note */
+  checkedCount: number;
+}
+
+export function fetchSimilarAnalyses(id: string) {
+  return jsonFetch<SimilarAnalysesResponse>(`/api/analyses/${id}/similar`);
+}
+
 export function submitReview(body: {
   verdictId: string;
   action: "accept" | "edit" | "reject";

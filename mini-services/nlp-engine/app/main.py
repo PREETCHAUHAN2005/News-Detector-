@@ -56,6 +56,10 @@ class AnalyzeRequest(BaseModel):
 class SimilarRequest(BaseModel):
     text: str
     candidates: List[Dict] = Field(default_factory=list)
+    """ranked list size for the dossier Precedent panel (legacy single `match`
+    behaviour is unaffected — it always uses the BR-08 near-duplicate gate)."""
+    topN: int = Field(default=3, ge=1, le=8)
+    minSim: float = Field(default=0.3, ge=0.0, le=1.0)
 
 
 @app.get("/healthz")
@@ -90,11 +94,18 @@ async def analyze(req: AnalyzeRequest):
 
 @app.post("/v1/similar")
 async def similar(req: SimilarRequest):
-    """Near-duplicate lookup (BR-08) among previously reviewed claims."""
+    """Near-duplicate lookup (BR-08) + ranked precedent list for the dossier.
+
+    `match` — legacy BR-08 single near-duplicate (above the reuse threshold).
+    `matches` — ranked similar claims above `minSim` (Precedent panel; advisory
+    only, never auto-applied)."""
     try:
-        return {"match": _engine().find_near_duplicate(req.text, req.candidates)}
+        return {
+            "match": _engine().find_near_duplicate(req.text, req.candidates),
+            "matches": _engine().find_similar(req.text, req.candidates, req.topN, req.minSim),
+        }
     except Exception:  # noqa: BLE001
-        return {"match": None}
+        return {"match": None, "matches": []}
 
 
 @app.get("/v1/meta")

@@ -29,6 +29,7 @@ import {
   FileSearch,
   Gauge,
   HelpCircle,
+  ListFilter,
   Loader2,
   RotateCcw,
   ScrollText,
@@ -219,6 +220,8 @@ function KpiTile({
   days,
   onDrill,
   drillHint,
+  onDrillSecondary,
+  drillHintSecondary,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: string;
@@ -231,6 +234,9 @@ function KpiTile({
   /** drill-down action — renders an affordance button on the tile */
   onDrill?: () => void;
   drillHint?: string;
+  /** optional second drill (e.g. cross-view with pre-applied filters) */
+  onDrillSecondary?: () => void;
+  drillHintSecondary?: string;
 }) {
   const tipWithPrev =
     tip && delta ? `${tip} · previous ${days}d: ${delta.previous.toLocaleString()}` : tip;
@@ -241,6 +247,17 @@ function KpiTile({
           <Icon className={`size-3.5 shrink-0 ${accent}`} aria-hidden />
           <span className="leading-tight">{label}</span>
           <span className="ml-auto flex shrink-0 items-center gap-1">
+            {onDrillSecondary && (
+              <button
+                type="button"
+                onClick={onDrillSecondary}
+                title={drillHintSecondary ?? "Drill down with filters"}
+                aria-label={drillHintSecondary ?? `Open ${label} in the review queue`}
+                className="rounded p-0.5 text-zinc-600 opacity-100 transition-all hover:bg-zinc-800 hover:text-amber-300 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 sm:opacity-0 sm:group-hover:opacity-100"
+              >
+                <ListFilter className="size-3.5" aria-hidden />
+              </button>
+            )}
             {onDrill && (
               <button
                 type="button"
@@ -328,6 +345,7 @@ export function AnalyticsView() {
   /** fairness drill-down (BR-17): topic opened from the chart */
   const [drillTopic, setDrillTopic] = useState<string | null>(null);
   const setView = useAppStore((s) => s.setView);
+  const setReviewPreset = useAppStore((s) => s.setReviewPreset);
   const { toast } = useToast();
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["analytics", days],
@@ -531,8 +549,11 @@ export function AnalyticsView() {
               ? `${rangeAnalyses.toLocaleString()} in the last ${days} days`
               : undefined
           }
-          onDrill={() => setView("review")}
-          drillHint="Open the review queue — every analysis with its filters"
+          onDrill={() => {
+            setReviewPreset({ status: "pending_review" });
+            setView("review");
+          }}
+          drillHint="Open the review queue pre-filtered to items awaiting review"
         />
         <KpiTile
           icon={BookOpenCheck}
@@ -567,6 +588,11 @@ export function AnalyticsView() {
           tip="Share of analyses the system responsibly abstained on"
           onDrill={scrollToSection("kpi-drill-verdict-mix")}
           drillHint="Show the verdict mix — abstained items are Unverified"
+          onDrillSecondary={() => {
+            setReviewPreset({ label: "Unverified" });
+            setView("review");
+          }}
+          drillHintSecondary="Open the review queue pre-filtered to abstained (Unverified) items"
         />
         <KpiTile
           icon={Gauge}

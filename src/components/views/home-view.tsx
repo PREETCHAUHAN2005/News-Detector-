@@ -94,7 +94,11 @@ export function HomeView() {
           : "Model recommendation filed for human review",
       });
       markAnalyzed();
+      // Invalidate the analyses cache family (recent list, pending count) and
+      // the sidebar's independently-keyed recents so the new claim shows up
+      // immediately instead of after its 15s staleTime / next nav click.
       void queryClient.invalidateQueries({ queryKey: ["analyses"] });
+      void queryClient.invalidateQueries({ queryKey: ["sidebar-recent"] });
       openAnalysis(result.analysis.id);
     },
     onError: (error: Error) => {

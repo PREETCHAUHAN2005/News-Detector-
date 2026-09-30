@@ -8,6 +8,13 @@ import { TAXONOMY } from "@/lib/taxonomy";
 
 const NLP_BASE = process.env.NLP_ENGINE_URL ?? "http://127.0.0.1:8001";
 
+export interface EngineHighlightTerm {
+  /** shared claim∩statement term from the engine's TF-IDF vocabulary */
+  term: string;
+  /** IDF weight of the term — retrieval strength, surfaced as hover tooltips */
+  idf: number;
+}
+
 export interface EngineEvidence {
   rank: number;
   title: string;
@@ -19,8 +26,8 @@ export interface EngineEvidence {
   speakerJob?: string;
   context?: string;
   subject?: string;
-  /** claim∩statement terms from the engine's TF-IDF vocabulary (idf-ranked) */
-  highlights?: string[];
+  /** claim∩statement terms (engine TF-IDF vocabulary, idf-ranked) */
+  highlights?: EngineHighlightTerm[];
 }
 
 export interface EngineVerdict {
@@ -60,10 +67,15 @@ export interface EngineAnalysis {
 
 export interface SimilarMatch {
   id?: string;
+  /** claim id (precedent panel candidates) */
+  claimId?: string;
   analysisId?: string;
   text?: string;
   finalLabel?: string;
   similarity?: number;
+  /** Prisma Date serializes to ISO string over the wire; server-side calls pass Date */
+  reviewedAt?: string | Date;
+  reviewerName?: string | null;
 }
 
 const DEGRADED: EngineAnalysis = {
@@ -137,6 +149,31 @@ export async function engineSimilar(text: string, candidates: SimilarMatch[]): P
     return data.match ?? null;
   } catch {
     return null;
+  }
+}
+
+/** Ranked similar-claim precedents for the dossier panel (advisory, never auto-applied). */
+export async function engineSimilarList(
+  text: string,
+  candidates: SimilarMatch[],
+  topN = 3,
+  minSim = 0.3
+): Promise<SimilarMatch[]> {
+  const res = await fetchWithTimeout(
+    `${NLP_BASE}/v1/similar`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, candidates, topN, minSim }),
+    },
+    15_000
+  );
+  if (!res || !res.ok) return [];
+  try {
+    const data = (await res.json()) as { matches?: SimilarMatch[] };
+    return Array.isArray(data.matches) ? data.matches : [];
+  } catch {
+    return [];
   }
 }
 

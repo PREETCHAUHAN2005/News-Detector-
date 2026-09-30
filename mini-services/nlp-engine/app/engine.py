@@ -87,14 +87,15 @@ class VeritasEngine:
 
     # ─────────────────────────── retrieval ───────────────────────────
 
-    def matched_terms(self, claim_text: str, statement: str, limit: int = 10) -> List[str]:
+    def matched_terms(self, claim_text: str, statement: str, limit: int = 10) -> List[Dict]:
         """Terms shared between the claim and a retrieved statement, ranked by
         IDF weight — an exact "why was this evidence retrieved" explanation.
 
-        Uses the production word-channel vocabulary (unigrams + bigrams), so
-        only terms the retrieval model actually indexes are reported. Unigrams
-        fully contained in a matched bigram are dropped to avoid double
-        highlights."""
+        Returns [{"term": str, "idf": float}] so the UI can surface each term's
+        retrieval weight (hover tooltips + explainability chips). Uses the
+        production word-channel vocabulary (unigrams + bigrams), so only terms
+        the retrieval model actually indexes are reported. Unigrams fully
+        contained in a matched bigram are dropped to avoid double highlights."""
         try:
             claim_idx = set(self.word_vec.transform([claim_text]).indices)
             stmt_idx = set(self.word_vec.transform([statement]).indices)
@@ -108,14 +109,14 @@ class VeritasEngine:
         idf = self.word_vec.idf_
         terms = [(inv_vocab[int(i)], float(idf[int(i)])) for i in shared]
         terms.sort(key=lambda t: (-t[1], -len(t[0])))
-        kept: List[str] = []
+        kept: List[Dict] = []
         kept_words: set = set()
-        for term, _w in terms:
+        for term, weight in terms:
             words = term.lower().split()
             # skip terms sharing a word with a kept term → non-overlapping highlights
             if any(w in kept_words for w in words):
                 continue
-            kept.append(term)
+            kept.append({"term": term, "idf": round(weight, 3)})
             kept_words.update(words)
             if len(kept) >= limit:
                 break
@@ -481,6 +482,38 @@ class VeritasEngine:
             out["similarity"] = round(float(sims[i]), 3)
             return out
         return None
+
+    def find_similar(
+        self,
+        text: str,
+        candidates: List[Dict],
+        top_n: int = 3,
+        min_sim: float = 0.3,
+    ) -> List[Dict]:
+        """Ranked similar-claim lookup for the dossier "Precedent" panel.
+
+        Unlike find_near_duplicate (BR-08 reuse gate, high threshold), this
+        surfaces the strongest precedents above `min_sim` so reviewers can see
+        how similar claims were ruled before — consistency support, not a
+        verdict. Deterministic, char-channel cosine (same channel as BR-08)."""
+        if not candidates:
+            return []
+        texts = [c.get("text", "") for c in candidates]
+        try:
+            mat = self.char_vec.transform([text] + texts)
+            sims = cosine_similarity(mat[0:1], mat[1:])[0]
+        except ValueError:
+            return []
+        order = np.argsort(-sims)[: max(1, top_n)]
+        out: List[Dict] = []
+        for i in order:
+            i = int(i)
+            if sims[i] < min_sim:
+                break
+            entry = dict(candidates[i])
+            entry["similarity"] = round(float(sims[i]), 3)
+            out.append(entry)
+        return out
 
     # ─────────────────────────── release gates (BRD §11) ───────────────────────────
 

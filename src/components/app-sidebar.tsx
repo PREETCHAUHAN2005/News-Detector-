@@ -132,7 +132,7 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
                       </TooltipContent>
                     </Tooltip>
                   ) : null}
-                  <span className="rounded-full border border-zinc-700/60 bg-zinc-800/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+                  <span className="rounded-full border border-zinc-700/60 bg-zinc-800/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-400">
                     human
                   </span>
                 </span>

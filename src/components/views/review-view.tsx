@@ -93,23 +93,40 @@ function saveFilters(filters: SavedFilters): void {
 
 export function ReviewView() {
   const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const reviewPreset = useAppStore((s) => s.reviewPreset);
+  const setReviewPreset = useAppStore((s) => s.setReviewPreset);
   const { data: session } = useSession();
   const user = session?.user as { name?: string | null; role?: string } | undefined;
   const role = user?.role ?? "viewer";
   const isReviewer = REVIEWER_ROLES.includes(role);
   const isSenior = SENIOR_ROLES.includes(role);
 
-  // restored once on mount (client-only component — hydration-safe)
+  // restored once on mount (client-only component — hydration-safe); a
+  // one-shot cross-view preset (analytics KPI drills) takes priority so the
+  // queue opens with the drill's filter already applied
   const [saved] = useState(loadSavedFilters);
   const [search, setSearch] = useState(saved.search);
   const [debounced, setDebounced] = useState(saved.search.trim());
-  const [status, setStatus] = useState(saved.status);
-  const [label, setLabel] = useState(saved.label);
+  const [status, setStatus] = useState(
+    reviewPreset?.status && STATUS_OPTIONS.some((o) => o.value === reviewPreset.status)
+      ? reviewPreset.status
+      : saved.status
+  );
+  const [label, setLabel] = useState(
+    reviewPreset?.label && ALL_LABELS.includes(reviewPreset.label as never)
+      ? reviewPreset.label
+      : saved.label
+  );
   const [highImpactOnly, setHighImpactOnly] = useState(saved.highImpactOnly);
   const [page, setPage] = useState(1);
   /** keyboard-selected row (j/k) — null until the first keypress */
   const [selected, setSelected] = useState<number | null>(null);
   const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  // consume the one-shot preset after initial render (store write only)
+  useEffect(() => {
+    if (reviewPreset) setReviewPreset(null);
+  }, [reviewPreset, setReviewPreset]);
 
   // debounce the search box (~300ms); typing always restarts pagination
   useEffect(() => {

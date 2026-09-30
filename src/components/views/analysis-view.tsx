@@ -12,9 +12,9 @@ import { useSession } from "next-auth/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ChevronDown, Clock, CopyPlus, Download, FileSearch, FolderSearch, Gavel, ListChecks, Loader2, ListTree, MessageSquareWarning, PenLine, RotateCw, ShieldAlert, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Clock, CopyPlus, Download, FileSearch, FolderSearch, Gavel, ListChecks, Loader2, ListTree, MessageSquareWarning, PenLine, RotateCw, Scale, ShieldAlert, ThumbsDown, ThumbsUp, X } from "lucide-react";
 
-import { fileAppeal, fetchAnalysis, submitFeedback, submitReview } from "@/lib/api";
+import { fileAppeal, fetchAnalysis, fetchSimilarAnalyses, submitFeedback, submitReview } from "@/lib/api";
 import { downloadReport } from "@/lib/report";
 import { ALL_LABELS, isVerdictLabel, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
@@ -162,6 +162,8 @@ export function AnalysisView() {
         ))}
       </section>
 
+      <PrecedentPanel analysisId={analysis.id} />
+
       {/* Back row */}
       <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-zinc-800/80 pt-5">
         <Button variant="outline" size="sm" onClick={() => setView("home")}>
@@ -308,9 +310,138 @@ function ClaimNavigator({ claims }: { claims: ClaimDTO[] }) {
   );
 }
 
+/* ───────────────────────── Precedent panel ───────────────────────── */
+
+/**
+ * PrecedentPanel — similar previously human-reviewed claims (consistency
+ * support). Uses the same char-channel cosine as the BR-08 reuse gate, but
+ * with a lower advisory threshold: reviewers SEE prior rulings on near-
+ * identical claims; nothing is auto-applied. Hidden while loading or when
+ * the engine has no precedent above the floor.
+ */
+function PrecedentPanel({ analysisId }: { analysisId: string }) {
+  const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const { data, isLoading } = useQuery({
+    queryKey: ["analysis-similar", analysisId],
+    queryFn: () => fetchSimilarAnalyses(analysisId),
+    staleTime: 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <section aria-label="Precedent" className="mt-6">
+        <div className="flex items-center gap-2 rounded-lg border border-zinc-800/70 bg-zinc-900/30 px-4 py-3 text-xs text-zinc-500">
+          <Loader2 className="size-3.5 animate-spin text-zinc-500" aria-hidden />
+          Checking precedent among previously reviewed claims…
+        </div>
+      </section>
+    );
+  }
+
+  const matches = data?.matches ?? [];
+  const checked = data?.checkedCount ?? 0;
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: 0.05, ease: "easeOut" }}
+      aria-label="Precedent — similar checked claims"
+      className="mt-6"
+      id="precedent"
+    >
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-zinc-800/80 px-4 py-3">
+          <Scale className="size-4 shrink-0 text-amber-300/90" aria-hidden />
+          <h2 className="text-[13px] font-semibold text-zinc-200">Precedent</h2>
+          <span className="text-[11px] text-zinc-500">
+            similar claims already ruled on by humans
+          </span>
+          <span
+            className="ml-auto rounded-full border border-zinc-700/60 bg-zinc-800/50 px-2 py-0.5 font-mono text-[10px] text-zinc-400"
+            title={`Consistency sweep over ${checked} human-verified claims (char-channel cosine, advisory only — the BR-08 reuse gate is stricter)`}
+          >
+            {checked.toLocaleString()} reviewed claims checked
+          </span>
+        </div>
+
+        {matches.length === 0 ? (
+          <p className="px-4 py-3.5 text-xs leading-relaxed text-zinc-500">
+            No similar precedent above the advisory floor — this claim does not closely match
+            any of the {checked.toLocaleString()} human-verified claims on record. The stricter
+            BR-08 near-duplicate reuse gate also did not fire.
+          </p>
+        ) : (
+          <ul className="divide-y divide-zinc-800/70">
+            {matches.map((match) => (
+              <li key={match.claimId}>
+                <button
+                  type="button"
+                  onClick={() => openAnalysis(match.analysisId)}
+                  className="group flex w-full flex-col gap-2 px-4 py-3 text-left transition-colors hover:bg-zinc-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 sm:flex-row sm:items-center sm:gap-4"
+                  aria-label={`Open precedent dossier — ${Math.round(match.similarity * 100)}% similar, ruled ${match.finalLabel}`}
+                >
+                  <span className="flex w-full shrink-0 items-center gap-2 sm:w-28 sm:flex-col sm:items-start sm:gap-1">
+                    <span className="font-mono text-sm font-semibold tabular-nums text-amber-200">
+                      {Math.round(match.similarity * 100)}%
+                      <span className="ml-1 text-[10px] font-normal text-zinc-500">sim.</span>
+                    </span>
+                    <span
+                      className="h-1 w-full max-w-24 overflow-hidden rounded-full bg-zinc-800/90"
+                      role="meter"
+                      aria-valuenow={Math.round(match.similarity * 100)}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-label={`Similarity ${Math.round(match.similarity * 100)}%`}
+                    >
+                      <span
+                        className={cn(
+                          "block h-full rounded-full transition-all",
+                          match.similarity >= 0.6
+                            ? "bg-amber-400/90"
+                            : match.similarity >= 0.4
+                              ? "bg-amber-500/60"
+                              : "bg-zinc-500"
+                        )}
+                        style={{ width: `${Math.max(4, Math.round(match.similarity * 100))}%` }}
+                      />
+                    </span>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="line-clamp-2 text-[13px] leading-relaxed text-zinc-300 transition-colors group-hover:text-zinc-100">
+                      {match.text}
+                    </span>
+                    <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-500">
+                      <span>ruled</span>
+                      <VerdictBadge label={match.finalLabel} size="sm" />
+                      <span aria-hidden>·</span>
+                      <span className="whitespace-nowrap">
+                        {match.reviewerName ? `by ${match.reviewerName}` : "by a reviewer"}{" "}
+                        {formatDistanceToNow(new Date(match.reviewedAt), { addSuffix: true })}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="hidden shrink-0 text-[11px] font-medium text-zinc-600 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:text-emerald-400 group-hover:opacity-100 sm:block">
+                    Open dossier →
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="border-t border-zinc-800/80 px-4 py-2.5 text-[10px] leading-relaxed text-zinc-600">
+          Advisory only — precedents inform consistency but never change this verdict. Verdict
+          reuse requires the stricter BR-08 near-duplicate gate.
+        </p>
+      </div>
+    </motion.section>
+  );
+}
+
 /* ───────────────────────── Header ───────────────────────── */
 
 function DossierHeader({ analysis, anyProvisional }: { analysis: AnalysisDTO; anyProvisional: boolean }) {
+  const openAnalysis = useAppStore((s) => s.openAnalysis);
   return (
     <motion.header
       initial={{ opacity: 0, y: 8 }}
@@ -380,7 +511,7 @@ function DossierHeader({ analysis, anyProvisional }: { analysis: AnalysisDTO; an
       </blockquote>
 
       {/* meta row */}
-      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 font-mono text-[11px] text-zinc-500">
+      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 font-mono text-[11px] text-zinc-400">
         <span title={analysis.id} className="text-zinc-400">
           #{analysis.id.slice(0, 8)}
         </span>
@@ -401,16 +532,23 @@ function DossierHeader({ analysis, anyProvisional }: { analysis: AnalysisDTO; an
         {analysis.duplicateOfId && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="inline-flex cursor-help items-center gap-1 rounded border border-teal-500/30 bg-teal-500/10 px-1.5 py-0.5 text-teal-300">
+              <button
+                type="button"
+                onClick={() => openAnalysis(analysis.duplicateOfId!)}
+                title="Open the source dossier this verdict was reused from"
+                aria-label={`Open the near-duplicate source analysis ${analysis.duplicateOfId.slice(0, 8)} (BR-08 reuse)`}
+                className="inline-flex cursor-pointer items-center gap-1 rounded border border-teal-500/30 bg-teal-500/10 px-1.5 py-0.5 text-teal-300 transition-colors hover:border-teal-500/50 hover:bg-teal-500/20 hover:text-teal-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+              >
                 <CopyPlus className="size-3" aria-hidden />
                 Reuses prior human verdict (BR-08)
-              </span>
+              </button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="max-w-64 border border-zinc-800 bg-zinc-900 text-left text-zinc-300">
               Near-duplicate of analysis #{analysis.duplicateOfId.slice(0, 8)}
               {typeof analysis.duplicateSimilarity === "number" &&
                 ` (${Math.round(analysis.duplicateSimilarity * 100)}% statement match)`}
               — the stored human ruling was reused instead of issuing a fresh model verdict.
+              Click to open the source dossier.
             </TooltipContent>
           </Tooltip>
         )}

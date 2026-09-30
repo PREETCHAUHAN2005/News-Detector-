@@ -3,7 +3,7 @@
  * and the ⌘K palette's "Export current dossier" action (BRD §12 transparency).
  */
 import type { AnalysisDTO } from "@/types/api";
-import { effectiveHighlightTerms } from "@/lib/highlight";
+import { effectiveHighlightDetails } from "@/lib/highlight";
 
 /** Human-readable KB rating slugs for the exported report. */
 const RATING_LABELS: Record<string, string> = {
@@ -66,14 +66,18 @@ export function buildReportMarkdown(analysis: AnalysisDTO): string {
       lines.push("");
       verdict.evidence.forEach((e) => {
         const rating = RATING_LABELS[e.kbRating] ?? e.kbRating;
-        const terms = effectiveHighlightTerms(e.highlights, claim.text, e.excerpt);
+        const details = effectiveHighlightDetails(e.highlights, claim.text, e.excerpt);
         lines.push(
           `${e.rank}. **${rating}** (${Math.round(e.similarity * 100)}% match) — "${e.excerpt}"${
             e.speaker ? ` — ${e.speaker}` : ""
           }${e.context ? `, ${e.context}` : ""}`
         );
-        if (terms.length > 0) {
-          lines.push(`   Matched claim terms: ${terms.map((t) => `\`${t}\``).join(", ")}`);
+        if (details.length > 0) {
+          lines.push(
+            `   Matched claim terms: ${details
+              .map((d) => `\`${d.term}\`${d.idf !== undefined ? ` (idf ${d.idf.toFixed(1)})` : ""}`)
+              .join(", ")}`
+          );
         }
         lines.push(`   Source: ${e.url}`);
       });

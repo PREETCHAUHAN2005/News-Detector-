@@ -11,6 +11,12 @@ export type ViewId =
   | "sources"
   | "model-card";
 
+/** Pre-applied review-queue filters for cross-view drills (analytics KPI → queue). */
+export interface ReviewPreset {
+  status?: string;
+  label?: string;
+}
+
 interface AppState {
   view: ViewId;
   activeAnalysisId: string | null;
@@ -25,6 +31,9 @@ interface AppState {
   /** keyboard shortcuts cheatsheet visibility ("?" key + topbar button) */
   shortcutsOpen: boolean;
   setShortcutsOpen: (open: boolean) => void;
+  /** one-shot review-queue filter preset; consumed (cleared) on queue mount */
+  reviewPreset: ReviewPreset | null;
+  setReviewPreset: (preset: ReviewPreset | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -38,4 +47,6 @@ export const useAppStore = create<AppState>((set) => ({
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   shortcutsOpen: false,
   setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
+  reviewPreset: null,
+  setReviewPreset: (preset) => set({ reviewPreset: preset }),
 }));
