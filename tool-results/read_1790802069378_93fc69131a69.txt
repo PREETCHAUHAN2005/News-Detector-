@@ -1,0 +1,1132 @@
+     1→"use client";
+     2→/**
+     3→ * AnalysisView — the evidence-first dossier for a single analysis (BR-10).
+     4→ *
+     5→ * HARD ORDERING REQUIREMENT (BRD §12, anti-automation-bias): for every
+     6→ * claim, the retrieved evidence is rendered BEFORE the model recommendation.
+     7→ * Do not reorder the sections inside <ClaimCard />.
+     8→ */
+     9→
+    10→import { useCallback, useMemo, useState } from "react";
+    11→import { useSession } from "next-auth/react";
+    12→import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+    13→import { format, formatDistanceToNow } from "date-fns";
+    14→import { motion } from "framer-motion";
+    15→import {
+    16→  ArrowLeft,
+    17→  Check,
+    18→  ChevronDown,
+    19→  Clock,
+    20→  CopyPlus,
+    21→  FileSearch,
+    22→  FolderSearch,
+    23→  Gavel,
+    24→  ListChecks,
+    25→  Loader2,
+    26→  MessageSquareWarning,
+    27→  PenLine,
+    28→  RotateCw,
+    29→  ShieldAlert,
+    30→  ThumbsDown,
+    31→  ThumbsUp,
+    32→  X,
+    33→} from "lucide-react";
+    34→
+    35→import { fileAppeal, fetchAnalysis, submitFeedback, submitReview } from "@/lib/api";
+    36→import { ALL_LABELS, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
+    37→import { useAppStore } from "@/lib/store";
+    38→import { cn } from "@/lib/utils";
+    39→import { effectiveLabel } from "@/types/api";
+    40→import type { AnalysisDTO, ClaimDTO, ReviewDTO, VerdictDTO, VerdictLabel } from "@/types/api";
+    41→import { ConfidenceBar, ConfidenceGauge } from "@/components/verdict/confidence-gauge";
+    42→import { EvidenceList } from "@/components/verdict/evidence-list";
+    43→import { StyleSignalsPanel } from "@/components/verdict/style-signals";
+    44→import { StatusBadge, VerdictBadge } from "@/components/verdict/verdict-badge";
+    45→import { useToast } from "@/hooks/use-toast";
+    46→import { Button } from "@/components/ui/button";
+    47→import {
+    48→  Collapsible,
+    49→  CollapsibleContent,
+    50→  CollapsibleTrigger,
+    51→} from "@/components/ui/collapsible";
+    52→import { Input } from "@/components/ui/input";
+    53→import { Label } from "@/components/ui/label";
+    54→import {
+    55→  Select,
+    56→  SelectContent,
+    57→  SelectItem,
+    58→  SelectTrigger,
+    59→  SelectValue,
+    60→} from "@/components/ui/select";
+    61→import { Skeleton } from "@/components/ui/skeleton";
+    62→import { Textarea } from "@/components/ui/textarea";
+    63→import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+    64→
+    65→/** Sensitive-topic categories behind the high-impact flag (mirrors the engine). */
+    66→const HIGH_IMPACT_CATEGORIES = [
+    67→  "Elections",
+    68→  "Health",
+    69→  "Public safety",
+    70→  "Public figures",
+    71→  "Finance",
+    72→];
+    73→
+    74→const CLAIM_TYPE_REASONS: Record<string, string> = {
+    75→  factual: "Declarative statement with checkable content (entities, quantities or events).",
+    76→  opinion: "Subjective framing / value judgment — opinions are excluded from truth assessment (BR-02).",
+    77→  satire: "Satire or parody markers detected — excluded from truth assessment (BR-02).",
+    78→  prediction: "Forward-looking statement — the outcome has not occurred yet (BR-02).",
+    79→};
+    80→
+    81→interface SessionUser {
+    82→  id?: string;
+    83→  name?: string | null;
+    84→  email?: string | null;
+    85→  role?: string;
+    86→}
+    87→
+    88→/** Invalidate everything that shows analysis state after a mutation. */
+    89→function useAnalysisInvalidation(analysisId: string) {
+    90→  const queryClient = useQueryClient();
+    91→  return useCallback(() => {
+    92→    void queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
+    93→    void queryClient.invalidateQueries({ queryKey: ["analyses"] });
+    94→    void queryClient.invalidateQueries({ queryKey: ["sidebar-recent"] });
+    95→  }, [queryClient, analysisId]);
+    96→}
+    97→
+    98→export function AnalysisView() {
+    99→  const activeAnalysisId = useAppStore((s) => s.activeAnalysisId);
+   100→  const setView = useAppStore((s) => s.setView);
+   101→  const { data: session } = useSession();
+   102→  const user = session?.user as SessionUser | undefined;
+   103→  const role = user?.role ?? "viewer";
+   104→  const isReviewer = REVIEWER_ROLES.includes(role);
+   105→  const isSenior = SENIOR_ROLES.includes(role);
+   106→
+   107→  const { data, isLoading, isError, error, refetch } = useQuery({
+   108→    queryKey: ["analysis", activeAnalysisId],
+   109→    queryFn: () => fetchAnalysis(activeAnalysisId ?? ""),
+   110→    enabled: Boolean(activeAnalysisId),
+   111→  });
+   112→
+   113→  if (!activeAnalysisId) {
+   114→    return (
+   115→      <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 px-4 py-20 text-center sm:px-6">
+   116→        <FileSearch className="size-9 text-zinc-700" aria-hidden />
+   117→        <p className="text-sm text-zinc-400">No analysis selected.</p>
+   118→        <Button variant="outline" size="sm" onClick={() => setView("home")}>
+   119→          <ArrowLeft /> Back to home
+   120→        </Button>
+   121→      </div>
+   122→    );
+   123→  }
+   124→
+   125→  if (isLoading) {
+   126→    return <AnalysisSkeleton />;
+   127→  }
+   128→
+   129→  if (isError || !data) {
+   130→    return (
+   131→      <div className="mx-auto flex max-w-5xl flex-col items-center gap-4 px-4 py-20 text-center sm:px-6">
+   132→        <FileSearch className="size-9 text-zinc-700" aria-hidden />
+   133→        <div>
+   134→          <h2 className="text-sm font-semibold text-zinc-200">Couldn&apos;t load this analysis</h2>
+   135→          <p className="mt-1 text-xs text-zinc-500">
+   136→            {error instanceof Error ? error.message : "Please try again."}
+   137→          </p>
+   138→        </div>
+   139→        <div className="flex gap-2">
+   140→          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+   141→            <RotateCw /> Retry
+   142→          </Button>
+   143→          <Button variant="ghost" size="sm" onClick={() => setView("home")}>
+   144→            <ArrowLeft /> Back to home
+   145→          </Button>
+   146→        </div>
+   147→      </div>
+   148→    );
+   149→  }
+   150→
+   151→  const analysis = data.analysis;
+   152→  const claims = [...analysis.claims].sort((a, b) => a.position - b.position);
+   153→  const anyProvisional = claims.some((c) => c.verdict?.provisional);
+   154→
+   155→  return (
+   156→    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
+   157→      <DossierHeader analysis={analysis} anyProvisional={anyProvisional} />
+   158→
+   159→      <section aria-label="Claim-by-claim analysis" className="mt-6 space-y-6">
+   160→        {claims.map((claim, index) => (
+   161→          <ClaimCard
+   162→            key={claim.id}
+   163→            claim={claim}
+   164→            analysis={analysis}
+   165→            index={index}
+   166→            isReviewer={isReviewer}
+   167→            isSenior={isSenior}
+   168→            viewerName={user?.name ?? ""}
+   169→            viewerEmail={user?.email ?? ""}
+   170→          />
+   171→        ))}
+   172→      </section>
+   173→
+   174→      {/* Back row */}
+   175→      <div className="mt-8 flex flex-wrap items-center gap-3 border-t border-zinc-800/80 pt-5">
+   176→        <Button variant="outline" size="sm" onClick={() => setView("home")}>
+   177→          <ArrowLeft /> Back to home
+   178→        </Button>
+   179→        <Button variant="ghost" size="sm" onClick={() => setView("review")} className="text-emerald-400 hover:text-emerald-300">
+   180→          <ListChecks /> Open review queue
+   181→        </Button>
+   182→      </div>
+   183→    </div>
+   184→  );
+   185→}
+   186→
+   187→/* ────────────────────────────── Header ────────────────────────────── */
+   188→
+   189→function DossierHeader({ analysis, anyProvisional }: { analysis: AnalysisDTO; anyProvisional: boolean }) {
+   190→  return (
+   191→    <motion.header
+   192→      initial={{ opacity: 0, y: 8 }}
+   193→      animate={{ opacity: 1, y: 0 }}
+   194→      transition={{ duration: 0.3, ease: "easeOut" }}
+   195→      className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6"
+   196→      aria-label="Analysis summary"
+   197→    >
+   198→      {/* badges row */}
+   199→      <div className="flex flex-wrap items-center gap-2">
+   200→        <StatusBadge status={analysis.status} />
+   201→        <VerdictBadge label={analysis.overallLabel} size="lg" />
+   202→        {typeof analysis.overallConfidence === "number" && (
+   203→          <span className="flex items-center gap-2">
+   204→            <ConfidenceBar
+   205→              confidence={analysis.overallConfidence}
+   206→              label={analysis.overallLabel}
+   207→              abstained={analysis.overallLabel === "Unverified"}
+   208→            />
+   209→            <span className="font-mono text-[11px] text-zinc-500">
+   210→              confidence {Math.round(analysis.overallConfidence * 100)}%
+   211→            </span>
+   212→          </span>
+   213→        )}
+   214→        {analysis.highImpact && (
+   215→          <Tooltip>
+   216→            <TooltipTrigger asChild>
+   217→              <span className="inline-flex cursor-help items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-300">
+   218→                <ShieldAlert className="size-3.5" aria-hidden />
+   219→                High-impact — second review required
+   220→              </span>
+   221→            </TooltipTrigger>
+   222→            <TooltipContent
+   223→              side="bottom"
+   224→              className="max-w-60 border border-zinc-800 bg-zinc-900 text-left text-zinc-200"
+   225→            >
+   226→              <p className="font-semibold">Sensitive-topic categories (BR-12):</p>
+   227→              <p className="mt-1 leading-relaxed text-zinc-400">
+   228→                {HIGH_IMPACT_CATEGORIES.join(" · ")} — every verdict needs a senior
+   229→                countersign before the analysis counts as reviewed.
+   230→              </p>
+   231→            </TooltipContent>
+   232→          </Tooltip>
+   233→        )}
+   234→        {anyProvisional && (
+   235→          <Tooltip>
+   236→            <TooltipTrigger asChild>
+   237→              <span className="inline-flex cursor-help items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-300">
+   238→                <Clock className="size-3.5" aria-hidden />
+   239→                Provisional — fast-moving subject
+   240→              </span>
+   241→            </TooltipTrigger>
+   242→            <TooltipContent side="bottom" className="max-w-60 border border-zinc-800 bg-zinc-900 text-left text-zinc-300">
+   243→              At least one claim touches a rapidly evolving subject — the verdict may age
+   244→              quickly and is flagged provisional by the engine.
+   245→            </TooltipContent>
+   246→          </Tooltip>
+   247→        )}
+   248→      </div>
+   249→
+   250→      {/* input text */}
+   251→      <blockquote className="mt-4 border-l-2 border-zinc-700 bg-zinc-900/50 py-3 pl-4 pr-3">
+   252→        <p className="line-clamp-none whitespace-pre-wrap text-sm italic leading-relaxed text-zinc-300">
+   253→          {analysis.inputText}
+   254→        </p>
+   255→      </blockquote>
+   256→
+   257→      {/* meta row */}
+   258→      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 font-mono text-[11px] text-zinc-500">
+   259→        <span title={analysis.id} className="text-zinc-400">
+   260→          #{analysis.id.slice(0, 8)}
+   261→        </span>
+   262→        {analysis.modelVersion && <span>· {analysis.modelVersion}</span>}
+   263→        {typeof analysis.latencyMs === "number" && <span>· {analysis.latencyMs}ms</span>}
+   264→        <span>
+   265→          ·{" "}
+   266→          <time dateTime={analysis.createdAt}>
+   267→            {formatDistanceToNow(new Date(analysis.createdAt), { addSuffix: true })}
+   268→          </time>
+   269→        </span>
+   270→        {analysis.submittedBy && <span>· by {analysis.submittedBy.name}</span>}
+   271→        {analysis.topic && (
+   272→          <span className="uppercase tracking-wide">· topic: {analysis.topic}</span>
+   273→        )}
+   274→        {analysis.duplicateOfId && (
+   275→          <Tooltip>
+   276→            <TooltipTrigger asChild>
+   277→              <span className="inline-flex cursor-help items-center gap-1 rounded border border-teal-500/30 bg-teal-500/10 px-1.5 py-0.5 text-teal-300">
+   278→                <CopyPlus className="size-3" aria-hidden />
+   279→                Reuses prior human verdict (BR-08)
+   280→              </span>
+   281→            </TooltipTrigger>
+   282→            <TooltipContent side="bottom" className="max-w-64 border border-zinc-800 bg-zinc-900 text-left text-zinc-300">
+   283→              Near-duplicate of analysis #{analysis.duplicateOfId.slice(0, 8)}
+   284→              {typeof analysis.duplicateSimilarity === "number" &&
+   285→                ` (${Math.round(analysis.duplicateSimilarity * 100)}% statement match)`}
+   286→              — the stored human ruling was reused instead of issuing a fresh model verdict.
+   287→            </TooltipContent>
+   288→          </Tooltip>
+   289→        )}
+   290→      </div>
+   291→    </motion.header>
+   292→  );
+   293→}
+   294→
+   295→/* ───────────────────────────── Claim card ───────────────────────────── */
+   296→
+   297→function ClaimCard({
+   298→  claim,
+   299→  analysis,
+   300→  index,
+   301→  isReviewer,
+   302→  isSenior,
+   303→  viewerName,
+   304→  viewerEmail,
+   305→}: {
+   306→  claim: ClaimDTO;
+   307→  analysis: AnalysisDTO;
+   308→  index: number;
+   309→  isReviewer: boolean;
+   310→  isSenior: boolean;
+   311→  viewerName: string;
+   312→  viewerEmail: string;
+   313→}) {
+   314→  const verdict = claim.verdict;
+   315→  const hasReviews = (verdict?.reviews.length ?? 0) > 0;
+   316→
+   317→  return (
+   318→    <motion.article
+   319→      initial={{ opacity: 0, y: 14 }}
+   320→      animate={{ opacity: 1, y: 0 }}
+   321→      transition={{ duration: 0.35, delay: Math.min(index * 0.06, 0.3), ease: "easeOut" }}
+   322→      className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6"
+   323→      aria-label={`Claim ${claim.position + 1}`}
+   324→    >
+   325→      {/* claim header */}
+   326→      <header>
+   327→        <div className="mb-2.5 flex flex-wrap items-center gap-2">
+   328→          <span
+   329→            className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-zinc-300"
+   330→            aria-label={`Claim number ${claim.position + 1}`}
+   331→          >
+   332→            #{String(claim.position + 1).padStart(2, "0")}
+   333→          </span>
+   334→          <ClaimTypeChip type={claim.claimType} />
+   335→        </div>
+   336→        <p className="text-[15px] leading-relaxed text-zinc-100">{claim.text}</p>
+   337→      </header>
+   338→
+   339→      {/* ── EVIDENCE FIRST (BRD §12 anti-automation-bias — do not reorder) ── */}
+   340→      <section aria-label="Retrieved evidence" className="mt-5">
+   341→        <h3 className="mb-2.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
+   342→          <FolderSearch className="size-4 text-emerald-400/80" aria-hidden />
+   343→          Retrieved evidence
+   344→          <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] font-normal text-zinc-400">
+   345→            {verdict?.evidence.length ?? 0}
+   346→          </span>
+   347→        </h3>
+   348→        <EvidenceList evidence={verdict?.evidence ?? []} />
+   349→      </section>
+   350→
+   351→      {/* divider: evidence above, model recommendation below */}
+   352→      <div
+   353→        className="my-6 flex items-center gap-3"
+   354→        role="separator"
+   355→        aria-label="End of evidence — model recommendation follows"
+   356→      >
+   357→        <div className="h-px flex-1 bg-zinc-800/80" />
+   358→        <span className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.16em] text-zinc-600">
+   359→          <ChevronDown className="size-3" aria-hidden />
+   360→          model recommendation — shown after evidence
+   361→          <ChevronDown className="size-3" aria-hidden />
+   362→        </span>
+   363→        <div className="h-px flex-1 bg-zinc-800/80" />
+   364→      </div>
+   365→
+   366→      {/* model recommendation */}
+   367→      {verdict ? (
+   368→        <>
+   369→          <section
+   370→            aria-label="Model recommendation"
+   371→            className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5"
+   372→          >
+   373→            <p className="mb-4 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-600">
+   374→              <FileSearch className="size-3.5" aria-hidden />
+   375→              Model recommendation
+   376→            </p>
+   377→            <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:gap-8">
+   378→              <div className="flex min-w-0 flex-1 flex-col items-start gap-3">
+   379→                <VerdictBadge label={verdict.label} size="lg" />
+   380→                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-600">
+   381→                  <span title={verdict.id}>verdict {verdict.id.slice(0, 8)}</span>
+   382→                  {verdict.provisional && (
+   383→                    <span className="inline-flex items-center gap-1 text-amber-300/90">
+   384→                      <Clock className="size-3" aria-hidden /> provisional — fast-moving subject
+   385→                    </span>
+   386→                  )}
+   387→                </div>
+   388→              </div>
+   389→              <ConfidenceGauge
+   390→                confidence={verdict.confidence}
+   391→                label={verdict.label}
+   392→                abstained={verdict.abstained}
+   393→                size={140}
+   394→              />
+   395→            </div>
+   396→            <div className="mt-5 border-t border-zinc-800/70 pt-4">
+   397→              <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-400">Why</h4>
+   398→              <p className="text-[13px] leading-relaxed text-zinc-300">{verdict.explanation}</p>
+   399→            </div>
+   400→          </section>
+   401→          {/* secondary style signals — self-labels as display-only */}
+   402→          <div className="mt-4">
+   403→            <StyleSignalsPanel signals={verdict.styleSignals} />
+   404→          </div>
+   405→        </>
+   406→      ) : (
+   407→        <p className="rounded-lg border border-dashed border-zinc-800 p-4 text-center text-xs text-zinc-500">
+   408→          No verdict was produced for this claim.
+   409→        </p>
+   410→      )}
+   411→
+   412→      {/* reviewer decision panel */}
+   413→      {verdict && isReviewer && (
+   414→        <div className="mt-5">
+   415→          <ReviewerDecisionPanel claim={claim} verdict={verdict} analysis={analysis} isSenior={isSenior} />
+   416→        </div>
+   417→      )}
+   418→
+   419→      {/* appeal + feedback */}
+   420→      {verdict && (!hasReviews || isReviewer) && (
+   421→        <div className="mt-4">
+   422→          <Collapsible>
+   423→            <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/30 px-3.5 py-2.5 text-xs font-medium text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40">
+   424→              <span className="flex items-center gap-2">
+   425→                <MessageSquareWarning className="size-4 text-amber-400/80" aria-hidden />
+   426→                Appeal &amp; reviewer feedback
+   427→              </span>
+   428→              <ChevronDown
+   429→                className="size-4 shrink-0 text-zinc-500 transition-transform duration-200 group-data-[state=open]:rotate-180"
+   430→                aria-hidden
+   431→              />
+   432→            </CollapsibleTrigger>
+   433→            <CollapsibleContent className="mt-3 space-y-4">
+   434→              {!hasReviews && (
+   435→                <AppealForm
+   436→                  verdictId={verdict.id}
+   437→                  analysisId={analysis.id}
+   438→                  defaultName={viewerName}
+   439→                  defaultEmail={viewerEmail}
+   440→                />
+   441→              )}
+   442→              {isReviewer && <FeedbackForm verdictId={verdict.id} />}
+   443→            </CollapsibleContent>
+   444→          </Collapsible>
+   445→        </div>
+   446→      )}
+   447→    </motion.article>
+   448→  );
+   449→}
+   450→
+   451→function ClaimTypeChip({ type }: { type: string }) {
+   452→  const display = type.charAt(0).toUpperCase() + type.slice(1);
+   453→  if (type === "factual") {
+   454→    return (
+   455→      <span className="inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+   456→        {display}
+   457→      </span>
+   458→    );
+   459→  }
+   460→  return (
+   461→    <Tooltip>
+   462→      <TooltipTrigger asChild>
+   463→        <span className="inline-flex cursor-help items-center rounded-full border border-zinc-700 bg-zinc-800/60 px-2 py-0.5 text-[11px] font-medium text-zinc-400">
+   464→          {display}
+   465→        </span>
+   466→      </TooltipTrigger>
+   467→      <TooltipContent side="top" className="max-w-64 border border-zinc-800 bg-zinc-900 text-left text-zinc-300">
+   468→        {CLAIM_TYPE_REASONS[type] ?? "Engine claim-type classification."}
+   469→      </TooltipContent>
+   470→    </Tooltip>
+   471→  );
+   472→}
+   473→
+   474→/* ───────────────────── Reviewer decision panel ───────────────────── */
+   475→
+   476→function ReviewerDecisionPanel({
+   477→  claim,
+   478→  verdict,
+   479→  analysis,
+   480→  isSenior,
+   481→}: {
+   482→  claim: ClaimDTO;
+   483→  verdict: VerdictDTO;
+   484→  analysis: AnalysisDTO;
+   485→  isSenior: boolean;
+   486→}) {
+   487→  const reviews = useMemo(
+   488→    () => [...verdict.reviews].sort((a, b) => a.round - b.round),
+   489→    [verdict.reviews]
+   490→  );
+   491→  const eff = effectiveLabel(claim);
+   492→
+   493→  const firstRound = reviews.length === 0;
+   494→  const awaitingSecond = analysis.highImpact && reviews.length === 1;
+   495→  const seniorTurn = awaitingSecond && isSenior;
+   496→
+   497→  return (
+   498→    <section
+   499→      aria-label="Reviewer decision"
+   500→      className="rounded-lg border border-zinc-700/70 bg-zinc-900/60 p-4"
+   501→    >
+   502→      <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1">
+   503→        <h4 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-300">
+   504→          <Gavel className="size-3.5 text-emerald-400" aria-hidden />
+   505→          Reviewer decision
+   506→        </h4>
+   507→        <span className="text-[11px] text-zinc-500">
+   508→          BR-11 — the human decision is final and overrides the model
+   509→        </span>
+   510→      </div>
+   511→
+   512→      {/* human verdict banner */}
+   513→      {reviews.length > 0 && (
+   514→        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3.5">
+   515→          <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
+   516→            Final
+   517→          </span>
+   518→          <VerdictBadge label={eff.label} size="lg" />
+   519→          <p className="w-full text-[11px] leading-relaxed text-zinc-400 sm:w-auto sm:flex-1">
+   520→            Human verdict — the reviewer decision is final and overrides the model
+   521→            recommendation (BR-11).
+   522→          </p>
+   523→        </div>
+   524→      )}
+   525→
+   526→      {firstRound && <ReviewControls verdict={verdict} analysisId={analysis.id} />}
+   527→
+   528→      {seniorTurn && (
+   529→        <ReviewControls
+   530→          verdict={verdict}
+   531→          analysisId={analysis.id}
+   532→          heading="Second review (mandatory for high-impact)"
+   533→        />
+   534→      )}
+   535→
+   536→      {awaitingSecond && !isSenior && (
+   537→        <p className="flex items-center gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 px-3.5 py-2.5 text-xs text-amber-300">
+   538→          <Clock className="size-3.5 shrink-0" aria-hidden />
+   539→          Awaiting mandatory senior second review (BR-12) — this analysis stays
+   540→          &ldquo;In review&rdquo; until a senior reviewer countersigns.
+   541→        </p>
+   542→      )}
+   543→
+   544→      {reviews.length >= 2 && (
+   545→        <p className="mb-3 flex items-center gap-2 text-xs text-zinc-500">
+   546→          <Check className="size-3.5 shrink-0 text-emerald-400" aria-hidden />
+   547→          Both review rounds are complete — the human verdict is locked.
+   548→        </p>
+   549→      )}
+   550→
+   551→      {analysis.status === "appealed" && (
+   552→        <p className="mt-3 flex items-center gap-2 rounded-lg border border-rose-500/25 bg-rose-500/5 px-3.5 py-2.5 text-xs text-rose-300">
+   553→          <MessageSquareWarning className="size-3.5 shrink-0" aria-hidden />
+   554→          An appeal has been filed on this analysis (BR-14) — resolution is tracked in the
+   555→          Appeals view.
+   556→        </p>
+   557→      )}
+   558→
+   559→      {reviews.length > 0 && <ReviewHistory reviews={reviews} />}
+   560→    </section>
+   561→  );
+   562→}
+   563→
+   564→function ReviewHistory({ reviews }: { reviews: ReviewDTO[] }) {
+   565→  return (
+   566→    <div>
+   567→      <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+   568→        Review history
+   569→      </p>
+   570→      <ol className="max-h-72 space-y-2 overflow-y-auto pr-1">
+   571→        {reviews.map((review) => (
+   572→          <li key={review.id} className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
+   573→            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+   574→              <span
+   575→                className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-300"
+   576→                aria-label={`Review round ${review.round}`}
+   577→              >
+   578→                R{review.round}
+   579→              </span>
+   580→              <span className="text-xs font-medium text-zinc-200">
+   581→                {review.reviewer?.name ?? "Reviewer"}
+   582→              </span>
+   583→              {review.reviewer?.role && (
+   584→                <span className="text-[11px] text-zinc-500">
+   585→                  {ROLE_DISPLAY[review.reviewer.role] ?? review.reviewer.role}
+   586→                </span>
+   587→              )}
+   588→              <ActionChip action={review.action} />
+   589→              <span className="ml-auto font-mono text-[10px] text-zinc-600">
+   590→                <time dateTime={review.createdAt}>
+   591→                  {format(new Date(review.createdAt), "MMM d, yyyy · HH:mm")}
+   592→                </time>
+   593→              </span>
+   594→            </div>
+   595→            <div className="mt-2 flex flex-wrap items-center gap-2">
+   596→              <span className="text-[11px] text-zinc-500">final label:</span>
+   597→              <VerdictBadge label={review.finalLabel} size="sm" />
+   598→            </div>
+   599→            {review.notes && (
+   600→              <p className="mt-2 whitespace-pre-wrap border-l-2 border-zinc-700 pl-2.5 text-xs leading-relaxed text-zinc-400">
+   601→                {review.notes}
+   602→              </p>
+   603→            )}
+   604→          </li>
+   605→        ))}
+   606→      </ol>
+   607→    </div>
+   608→  );
+   609→}
+   610→
+   611→function ActionChip({ action }: { action: "accept" | "edit" | "reject" }) {
+   612→  const map: Record<"accept" | "edit" | "reject", { label: string; className: string }> = {
+   613→    accept: {
+   614→      label: "accepted",
+   615→      className: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+   616→    },
+   617→    edit: {
+   618→      label: "edited label",
+   619→      className: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+   620→    },
+   621→    reject: {
+   622→      label: "rejected",
+   623→      className: "border-rose-500/30 bg-rose-500/10 text-rose-400",
+   624→    },
+   625→  };
+   626→  const m = map[action];
+   627→  return (
+   628→    <span
+   629→      className={cn(
+   630→        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium",
+   631→        m.className
+   632→      )}
+   633→    >
+   634→      {m.label}
+   635→    </span>
+   636→  );
+   637→}
+   638→
+   639→/** Accept / edit-label / reject-to-unverified controls (round 1 or senior round 2). */
+   640→function ReviewControls({
+   641→  verdict,
+   642→  analysisId,
+   643→  heading,
+   644→}: {
+   645→  verdict: VerdictDTO;
+   646→  analysisId: string;
+   647→  heading?: string;
+   648→}) {
+   649→  const { toast } = useToast();
+   650→  const invalidate = useAnalysisInvalidation(analysisId);
+   651→  const [mode, setMode] = useState<"idle" | "edit" | "reject">("idle");
+   652→  const [selectedLabel, setSelectedLabel] = useState<VerdictLabel | "">("");
+   653→  const [notes, setNotes] = useState("");
+   654→
+   655→  const reviewMutation = useMutation({
+   656→    mutationFn: submitReview,
+   657→    onSuccess: (result, variables) => {
+   658→      invalidate();
+   659→      setMode("idle");
+   660→      setSelectedLabel("");
+   661→      setNotes("");
+   662→      if (result.needsSecondReview) {
+   663→        toast({
+   664→          title: "High-impact: awaiting mandatory senior second review",
+   665→          description:
+   666→            "Your review is recorded. A senior reviewer must countersign before this analysis is marked reviewed (BR-12).",
+   667→        });
+   668→      } else {
+   669→        toast({
+   670→          title:
+   671→            variables.action === "accept"
+   672→              ? "Recommendation accepted — human verdict recorded"
+   673→              : variables.action === "edit"
+   674→                ? "Label corrected — human verdict recorded"
+   675→                : "Recommendation rejected — recorded as Unverified",
+   676→          description: "The reviewer decision is final and overrides the model (BR-11).",
+   677→        });
+   678→      }
+   679→    },
+   680→    onError: (err: Error) => {
+   681→      toast({
+   682→        variant: "destructive",
+   683→        title: "Could not record the review",
+   684→        description: err.message,
+   685→      });
+   686→    },
+   687→  });
+   688→
+   689→  const pending = reviewMutation.isPending;
+   690→
+   691→  function submit(action: "accept" | "edit" | "reject"): void {
+   692→    reviewMutation.mutate({
+   693→      verdictId: verdict.id,
+   694→      action,
+   695→      finalLabel: action === "edit" && selectedLabel ? selectedLabel : undefined,
+   696→      notes: action === "reject" ? notes.trim() : undefined,
+   697→    });
+   698→  }
+   699→
+   700→  return (
+   701→    <div className="space-y-3">
+   702→      {heading && (
+   703→        <p className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
+   704→          <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
+   705→          {heading}
+   706→        </p>
+   707→      )}
+   708→
+   709→      {mode === "idle" && (
+   710→        <div className="flex flex-wrap gap-2">
+   711→          <Button
+   712→            type="button"
+   713→            variant="outline"
+   714→            size="sm"
+   715→            disabled={pending}
+   716→            onClick={() => submit("accept")}
+   717→            className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
+   718→          >
+   719→            {pending ? (
+   720→              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+   721→            ) : (
+   722→              <Check className="size-3.5" aria-hidden />
+   723→            )}
+   724→            Accept
+   725→          </Button>
+   726→          <Button
+   727→            type="button"
+   728→            variant="outline"
+   729→            size="sm"
+   730→            disabled={pending}
+   731→            onClick={() => setMode("edit")}
+   732→            className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+   733→          >
+   734→            <PenLine className="size-3.5" aria-hidden />
+   735→            Edit label
+   736→          </Button>
+   737→          <Button
+   738→            type="button"
+   739→            variant="outline"
+   740→            size="sm"
+   741→            disabled={pending}
+   742→            onClick={() => setMode("reject")}
+   743→            className="border-rose-500/40 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+   744→          >
+   745→            <X className="size-3.5" aria-hidden />
+   746→            Reject to Unverified
+   747→          </Button>
+   748→        </div>
+   749→      )}
+   750→
+   751→      {mode === "edit" && (
+   752→        <div className="space-y-2.5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+   753→          <Label htmlFor={`edit-label-${verdict.id}`} className="text-[11px] text-zinc-400">
+   754→            Corrected label — required
+   755→          </Label>
+   756→          <Select value={selectedLabel} onValueChange={(v) => setSelectedLabel(v as VerdictLabel)}>
+   757→            <SelectTrigger
+   758→              id={`edit-label-${verdict.id}`}
+   759→              className="h-9 w-full border-zinc-800 bg-zinc-900/60 text-zinc-200 sm:w-72"
+   760→            >
+   761→              <SelectValue placeholder="Choose the correct label…" />
+   762→            </SelectTrigger>
+   763→            <SelectContent className="border-zinc-800 bg-zinc-900">
+   764→              {ALL_LABELS.map((label) => (
+   765→                <SelectItem key={label} value={label}>
+   766→                  {LABEL_META[label].display}
+   767→                </SelectItem>
+   768→              ))}
+   769→            </SelectContent>
+   770→          </Select>
+   771→          <div className="flex flex-wrap gap-2">
+   772→            <Button type="button" size="sm" disabled={!selectedLabel || pending} onClick={() => submit("edit")}>
+   773→              {pending ? (
+   774→                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+   775→              ) : (
+   776→                <Check className="size-3.5" aria-hidden />
+   777→              )}
+   778→              Confirm edit
+   779→            </Button>
+   780→            <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setMode("idle")}>
+   781→              Cancel
+   782→            </Button>
+   783→          </div>
+   784→        </div>
+   785→      )}
+   786→
+   787→      {mode === "reject" && (
+   788→        <div className="space-y-2.5 rounded-lg border border-rose-500/25 bg-rose-500/5 p-3">
+   789→          <Label htmlFor={`reject-notes-${verdict.id}`} className="text-[11px] text-zinc-400">
+   790→            Reason for rejecting — required, kept in the audit trail
+   791→          </Label>
+   792→          <Textarea
+   793→            id={`reject-notes-${verdict.id}`}
+   794→            rows={3}
+   795→            value={notes}
+   796→            onChange={(e) => setNotes(e.target.value)}
+   797→            placeholder="Why should this recommendation not stand? The claim will be recorded as Unverified."
+   798→            className="min-h-20 border-zinc-800 bg-zinc-900/60 text-[13px] text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-rose-500/30"
+   799→          />
+   800→          <div className="flex flex-wrap items-center gap-2">
+   801→            <Button
+   802→              type="button"
+   803→              size="sm"
+   804→              disabled={notes.trim().length === 0 || pending}
+   805→              onClick={() => submit("reject")}
+   806→              className="bg-rose-500/90 text-white hover:bg-rose-500"
+   807→            >
+   808→              {pending ? (
+   809→                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+   810→              ) : (
+   811→                <X className="size-3.5" aria-hidden />
+   812→              )}
+   813→              Confirm rejection
+   814→            </Button>
+   815→            <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setMode("idle")}>
+   816→              Cancel
+   817→            </Button>
+   818→          </div>
+   819→        </div>
+   820→      )}
+   821→    </div>
+   822→  );
+   823→}
+   824→
+   825→/* ─────────────────── Appeal & feedback (collapsible) ─────────────────── */
+   826→
+   827→function AppealForm({
+   828→  verdictId,
+   829→  analysisId,
+   830→  defaultName,
+   831→  defaultEmail,
+   832→}: {
+   833→  verdictId: string;
+   834→  analysisId: string;
+   835→  defaultName: string;
+   836→  defaultEmail: string;
+   837→}) {
+   838→  const { toast } = useToast();
+   839→  const invalidate = useAnalysisInvalidation(analysisId);
+   840→  const [name, setName] = useState(defaultName);
+   841→  const [email, setEmail] = useState(defaultEmail);
+   842→  const [reason, setReason] = useState("");
+   843→  const [filed, setFiled] = useState(false);
+   844→
+   845→  const appealMutation = useMutation({
+   846→    mutationFn: fileAppeal,
+   847→    onSuccess: () => {
+   848→      setFiled(true);
+   849→      invalidate();
+   850→      toast({
+   851→        title: "Appeal filed (BR-14)",
+   852→        description: "Appeal filed — tracked in the Appeals view. A senior reviewer will resolve it.",
+   853→      });
+   854→    },
+   855→    onError: (err: Error) => {
+   856→      toast({
+   857→        variant: "destructive",
+   858→        title: "Could not file the appeal",
+   859→        description: err.message,
+   860→      });
+   861→    },
+   862→  });
+   863→
+   864→  if (filed) {
+   865→    return (
+   866→      <p className="flex items-center gap-2 rounded-lg border border-teal-500/25 bg-teal-500/5 px-3.5 py-2.5 text-xs text-teal-300">
+   867→        <Check className="size-3.5 shrink-0" aria-hidden />
+   868→        Appeal filed — tracked in the Appeals view. A senior reviewer will resolve it.
+   869→      </p>
+   870→    );
+   871→  }
+   872→
+   873→  const nameValid = name.trim().length >= 2;
+   874→  const reasonValid = reason.trim().length >= 10;
+   875→  const pending = appealMutation.isPending;
+   876→
+   877→  return (
+   878→    <form
+   879→      className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3.5"
+   880→      onSubmit={(e) => {
+   881→        e.preventDefault();
+   882→        if (nameValid && reasonValid && !pending) {
+   883→          appealMutation.mutate({
+   884→            verdictId,
+   885→            appellantName: name.trim(),
+   886→            appellantEmail: email.trim() || undefined,
+   887→            reason: reason.trim(),
+   888→          });
+   889→        }
+   890→      }}
+   891→    >
+   892→      <div>
+   893→        <h5 className="text-xs font-semibold text-zinc-200">
+   894→          File an appeal{" "}
+   895→          <span className="font-normal text-zinc-500">(BR-14 — open to any labelled party)</span>
+   896→        </h5>
+   897→        <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+   898→          Disagree with this verdict? Appeals are resolved by a senior reviewer.
+   899→        </p>
+   900→      </div>
+   901→
+   902→      <div className="grid gap-3 sm:grid-cols-2">
+   903→        <div className="space-y-1.5">
+   904→          <Label htmlFor={`appeal-name-${verdictId}`} className="text-[11px] text-zinc-400">
+   905→            Appellant name
+   906→          </Label>
+   907→          <Input
+   908→            id={`appeal-name-${verdictId}`}
+   909→            value={name}
+   910→            onChange={(e) => setName(e.target.value)}
+   911→            placeholder="Your name"
+   912→            autoComplete="name"
+   913→            className="h-8 border-zinc-800 bg-zinc-900/60 text-xs text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-emerald-500/30"
+   914→          />
+   915→        </div>
+   916→        <div className="space-y-1.5">
+   917→          <Label htmlFor={`appeal-email-${verdictId}`} className="text-[11px] text-zinc-400">
+   918→            Email <span className="text-zinc-600">(optional)</span>
+   919→          </Label>
+   920→          <Input
+   921→            id={`appeal-email-${verdictId}`}
+   922→            type="email"
+   923→            value={email}
+   924→            onChange={(e) => setEmail(e.target.value)}
+   925→            placeholder="you@example.org"
+   926→            autoComplete="email"
+   927→            className="h-8 border-zinc-800 bg-zinc-900/60 text-xs text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-emerald-500/30"
+   928→          />
+   929→        </div>
+   930→      </div>
+   931→
+   932→      <div className="space-y-1.5">
+   933→        <Label htmlFor={`appeal-reason-${verdictId}`} className="text-[11px] text-zinc-400">
+   934→          Reason <span className="text-zinc-600">(min 10 characters)</span>
+   935→        </Label>
+   936→        <Textarea
+   937→          id={`appeal-reason-${verdictId}`}
+   938→          rows={3}
+   939→          value={reason}
+   940→          onChange={(e) => setReason(e.target.value)}
+   941→          placeholder="Explain why you believe this verdict is wrong — cite evidence if you can."
+   942→          className="min-h-20 border-zinc-800 bg-zinc-900/60 text-[13px] text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-emerald-500/30"
+   943→        />
+   944→      </div>
+   945→
+   946→      <div className="flex items-center justify-between gap-3">
+   947→        <Button
+   948→          type="submit"
+   949→          size="sm"
+   950→          disabled={!nameValid || !reasonValid || pending}
+   951→          className="bg-amber-500/90 text-zinc-950 hover:bg-amber-400"
+   952→        >
+   953→          {pending ? (
+   954→            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+   955→          ) : (
+   956→            <MessageSquareWarning className="size-3.5" aria-hidden />
+   957→          )}
+   958→          File appeal
+   959→        </Button>
+   960→        <span className="font-mono text-[10px] text-zinc-600" aria-live="polite">
+   961→          reason {reason.trim().length}/10 chars
+   962→        </span>
+   963→      </div>
+   964→    </form>
+   965→  );
+   966→}
+   967→
+   968→function FeedbackForm({ verdictId }: { verdictId: string }) {
+   969→  const { toast } = useToast();
+   970→  const [mode, setMode] = useState<"idle" | "wrong">("idle");
+   971→  const [corrected, setCorrected] = useState<VerdictLabel | "">("");
+   972→  const [notes, setNotes] = useState("");
+   973→  const [done, setDone] = useState(false);
+   974→
+   975→  const feedbackMutation = useMutation({
+   976→    mutationFn: submitFeedback,
+   977→    onSuccess: () => {
+   978→      setDone(true);
+   979→      toast({
+   980→        title: "Feedback recorded as labelled training data",
+   981→        description: "Reviewer feedback becomes labelled training data for future releases (BR-15).",
+   982→      });
+   983→    },
+   984→    onError: (err: Error) => {
+   985→      toast({
+   986→        variant: "destructive",
+   987→        title: "Could not record feedback",
+   988→        description: err.message,
+   989→      });
+   990→    },
+   991→  });
+   992→
+   993→  if (done) {
+   994→    return (
+   995→      <p className="flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3.5 py-2.5 text-xs text-emerald-400">
+   996→        <ThumbsUp className="size-3.5 shrink-0" aria-hidden />
+   997→        Feedback recorded as labelled training data — thank you (BR-15).
+   998→      </p>
+   999→    );
+  1000→  }
+  1001→
+  1002→  const pending = feedbackMutation.isPending;
+  1003→
+  1004→  return (
+  1005→    <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/30 p-3.5">
+  1006→      <div>
+  1007→        <h5 className="text-xs font-semibold text-zinc-200">
+  1008→          Reviewer feedback{" "}
+  1009→          <span className="font-normal text-zinc-500">(BR-15 — labelled training data)</span>
+  1010→        </h5>
+  1011→        <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+  1012→          Was the model recommendation right? Your answer is stored as labelled training data.
+  1013→        </p>
+  1014→      </div>
+  1015→
+  1016→      {mode === "idle" ? (
+  1017→        <div className="flex flex-wrap gap-2">
+  1018→          <Button
+  1019→            type="button"
+  1020→            variant="outline"
+  1021→            size="sm"
+  1022→            disabled={pending}
+  1023→            onClick={() => feedbackMutation.mutate({ verdictId, agree: true })}
+  1024→            className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-300"
+  1025→          >
+  1026→            {pending ? (
+  1027→              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+  1028→            ) : (
+  1029→              <ThumbsUp className="size-3.5" aria-hidden />
+  1030→            )}
+  1031→            Model was right
+  1032→          </Button>
+  1033→          <Button
+  1034→            type="button"
+  1035→            variant="outline"
+  1036→            size="sm"
+  1037→            disabled={pending}
+  1038→            onClick={() => setMode("wrong")}
+  1039→            className="border-rose-500/40 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+  1040→          >
+  1041→            <ThumbsDown className="size-3.5" aria-hidden />
+  1042→            Model was wrong
+  1043→          </Button>
+  1044→        </div>
+  1045→      ) : (
+  1046→        <div className="space-y-2.5">
+  1047→          <Label htmlFor={`fb-label-${verdictId}`} className="text-[11px] text-zinc-400">
+  1048→            Corrected label — what should it have been?
+  1049→          </Label>
+  1050→          <Select value={corrected} onValueChange={(v) => setCorrected(v as VerdictLabel)}>
+  1051→            <SelectTrigger
+  1052→              id={`fb-label-${verdictId}`}
+  1053→              className="h-9 w-full border-zinc-800 bg-zinc-900/60 text-zinc-200 sm:w-72"
+  1054→            >
+  1055→              <SelectValue placeholder="Choose the corrected label…" />
+  1056→            </SelectTrigger>
+  1057→            <SelectContent className="border-zinc-800 bg-zinc-900">
+  1058→              {ALL_LABELS.map((label) => (
+  1059→                <SelectItem key={label} value={label}>
+  1060→                  {LABEL_META[label].display}
+  1061→                </SelectItem>
+  1062→              ))}
+  1063→            </SelectContent>
+  1064→          </Select>
+  1065→          <Textarea
+  1066→            aria-label="Feedback notes"
+  1067→            rows={2}
+  1068→            value={notes}
+  1069→            onChange={(e) => setNotes(e.target.value)}
+  1070→            placeholder="Notes (optional) — what did the model miss?"
+  1071→            className="min-h-16 border-zinc-800 bg-zinc-900/60 text-[13px] text-zinc-200 placeholder:text-zinc-600 focus-visible:ring-emerald-500/30"
+  1072→          />
+  1073→          <div className="flex flex-wrap gap-2">
+  1074→            <Button
+  1075→              type="button"
+  1076→              size="sm"
+  1077→              disabled={!corrected || pending}
+  1078→              onClick={() =>
+  1079→                feedbackMutation.mutate({
+  1080→                  verdictId,
+  1081→                  agree: false,
+  1082→                  correctedLabel: corrected || undefined,
+  1083→                  notes: notes.trim() || undefined,
+  1084→                })
+  1085→              }
+  1086→            >
+  1087→              {pending ? (
+  1088→                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+  1089→              ) : (
+  1090→                <ThumbsDown className="size-3.5" aria-hidden />
+  1091→              )}
+  1092→              Submit feedback
+  1093→            </Button>
+  1094→            <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => setMode("idle")}>
+  1095→              Cancel
+  1096→            </Button>
+  1097→          </div>
+  1098→        </div>
+  1099→      )}
+  1100→    </div>
+  1101→  );
+  1102→}
+  1103→
+  1104→/* ─────────────────────────── Skeletons ─────────────────────────── */
+  1105→
+  1106→function AnalysisSkeleton() {
+  1107→  return (
+  1108→    <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6" aria-busy="true" aria-live="polite">
+  1109→      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6">
+  1110→        <div className="flex flex-wrap gap-2">
+  1111→          <Skeleton className="h-6 w-28 rounded-full" />
+  1112→          <Skeleton className="h-6 w-44 rounded-full" />
+  1113→          <Skeleton className="h-6 w-36 rounded-full" />
+  1114→        </div>
+  1115→        <Skeleton className="mt-4 h-16 w-full" />
+  1116→        <Skeleton className="mt-3 h-3 w-2/3" />
+  1117→      </div>
+  1118→      {[0, 1].map((i) => (
+  1119→        <div key={i} className="mt-6 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6">
+  1120→          <div className="flex items-center gap-2">
+  1121→            <Skeleton className="h-5 w-10" />
+  1122→            <Skeleton className="h-5 w-20 rounded-full" />
+  1123→          </div>
+  1124→          <Skeleton className="mt-3 h-4 w-11/12" />
+  1125→          <Skeleton className="mt-5 h-24 w-full" />
+  1126→          <Skeleton className="mt-5 h-36 w-full" />
+  1127→        </div>
+  1128→      ))}
+  1129→    </div>
+  1130→  );
+  1131→}
+  1132→

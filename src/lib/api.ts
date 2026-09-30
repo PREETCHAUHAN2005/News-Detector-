@@ -1,0 +1,182 @@
+"use client";
+/** Typed client-side API helpers (all same-origin, session-authenticated). */
+import type {
+  AnalysisDTO,
+  AnalyticsDTO,
+  AppealDTO,
+  AuditLogDTO,
+  ModelCardDTO,
+  SuggestionDTO,
+  TrustedSourceDTO,
+} from "@/types/api";
+
+class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function jsonFetch<T>(input: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(input, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = await res.json();
+      message = body.error ?? message;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(message, res.status);
+  }
+  return (await res.json()) as T;
+}
+
+export interface AnalyzeResponse {
+  analysis: AnalysisDTO;
+  reused?: boolean;
+  degraded?: boolean;
+}
+
+export function analyzeText(text: string, url?: string) {
+  return jsonFetch<AnalyzeResponse>("/api/analyze", {
+    method: "POST",
+    body: JSON.stringify({ text, url: url || undefined }),
+  });
+}
+
+export interface AnalysesListResponse {
+  analyses: AnalysisDTO[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export function fetchAnalyses(params: {
+  status?: string;
+  label?: string;
+  q?: string;
+  highImpact?: string;
+  page?: number;
+  pageSize?: number;
+}) {
+  const search = new URLSearchParams();
+  if (params.status) search.set("status", params.status);
+  if (params.label) search.set("label", params.label);
+  if (params.q) search.set("q", params.q);
+  if (params.highImpact) search.set("highImpact", params.highImpact);
+  search.set("page", String(params.page ?? 1));
+  search.set("pageSize", String(params.pageSize ?? 20));
+  return jsonFetch<AnalysesListResponse>(`/api/analyses?${search.toString()}`);
+}
+
+export function fetchAnalysis(id: string) {
+  return jsonFetch<{ analysis: AnalysisDTO }>(`/api/analyses/${id}`);
+}
+
+export function submitReview(body: {
+  verdictId: string;
+  action: "accept" | "edit" | "reject";
+  finalLabel?: string;
+  notes?: string;
+}) {
+  return jsonFetch<{
+    review: { id: string; finalLabel: string | null; round: number };
+    status: string;
+    needsSecondReview: boolean;
+  }>("/api/reviews", { method: "POST", body: JSON.stringify(body) });
+}
+
+export function fileAppeal(body: {
+  verdictId: string;
+  appellantName: string;
+  appellantEmail?: string;
+  reason: string;
+}) {
+  return jsonFetch<{ appeal: AppealDTO }>("/api/appeals", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchAppeals(status?: string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return jsonFetch<{ appeals: AppealDTO[] }>(`/api/appeals${qs}`);
+}
+
+export function resolveAppeal(id: string, status: string, resolutionNotes?: string) {
+  return jsonFetch<{ appeal: AppealDTO }>(`/api/appeals/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status, resolutionNotes }),
+  });
+}
+
+export function fetchAnalytics() {
+  return jsonFetch<AnalyticsDTO>("/api/analytics");
+}
+
+export function fetchAudit(params: { action?: string; entityType?: string; page?: number }) {
+  const search = new URLSearchParams();
+  if (params.action) search.set("action", params.action);
+  if (params.entityType) search.set("entityType", params.entityType);
+  search.set("page", String(params.page ?? 1));
+  return jsonFetch<{
+    logs: AuditLogDTO[];
+    total: number;
+    page: number;
+    pageSize: number;
+    availableActions: string[];
+  }>(`/api/audit?${search.toString()}`);
+}
+
+export function fetchSources() {
+  return jsonFetch<{ sources: TrustedSourceDTO[] }>("/api/sources");
+}
+
+export function upsertSource(body: {
+  name: string;
+  domain: string;
+  category: string;
+  reliabilityScore: number;
+  notes?: string;
+}) {
+  return jsonFetch<{ source: TrustedSourceDTO }>("/api/sources", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function submitFeedback(body: {
+  verdictId: string;
+  agree: boolean;
+  correctedLabel?: string;
+  notes?: string;
+}) {
+  return jsonFetch<{ feedback: { id: string } }>("/api/feedback", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchModelCard() {
+  return jsonFetch<ModelCardDTO>("/api/model-card");
+}
+
+export function fetchHealth() {
+  return jsonFetch<{ status: string; database: string; nlpEngine: string }>("/api/health");
+}
+
+/** Engine suggestions come through the model-card proxy. */
+export async function fetchSuggestions(): Promise<SuggestionDTO[]> {
+  try {
+    const data = await fetchModelCard();
+    const card = data.card as { suggestions?: SuggestionDTO[] } | null;
+    return card?.suggestions ?? [];
+  } catch {
+    return [];
+  }
+}

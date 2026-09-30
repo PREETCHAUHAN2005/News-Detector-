@@ -1,0 +1,10 @@
+{
+  "name": "nlp-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Veritas NLP verification engine (FastAPI + scikit-learn)",
+  "scripts": {
+    "dev": "python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload",
+    "start": "python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8001"
+  }
+}

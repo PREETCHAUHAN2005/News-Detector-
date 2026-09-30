@@ -1,0 +1,188 @@
+// Veritas — Fake News Detection using NLP
+// Prisma schema (SQLite). See ARCHITECTURE.md §5.2 for the data model rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────── Identity ───────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  // viewer | reviewer | senior_reviewer | admin
+  role         String   @default("viewer")
+  avatarColor  String   @default("emerald")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  analyses    Analysis[]    @relation("submittedBy")
+  reviews     Review[]
+  appeals     Appeal[]      @relation("appealResolver")
+  auditLogs   AuditLog[]
+  feedback    Feedback[]
+}
+
+// ─────────────────────────────── Workflow ───────────────────────────────
+
+model Analysis {
+  id        String   @id @default(cuid())
+  inputText String
+  inputUrl  String?
+  // pending_review | in_review | reviewed | appealed
+  status    String   @default("pending_review")
+  // Supported | Contradicted | Misleading | Unverified | NotAssessable (model roll-up)
+  overallLabel          String?
+  overallConfidence     Float?
+  highImpact            Boolean @default(false)
+  duplicateOfId         String? // BR-08: reuse of a previously reviewed analysis
+  duplicateSimilarity   Float?
+  modelVersion          String?
+  latencyMs             Int?
+  // de-normalised primary topic derived from subjects, for fairness reports (BR-17)
+  topic                 String?
+  submittedById         String?
+  submittedBy           User?   @relation("submittedBy", fields: [submittedById], references: [id])
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  claims   Claim[]
+}
+
+model Claim {
+  id         String  @id @default(cuid())
+  analysisId String
+  analysis   Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  position   Int
+  text       String
+  // factual | opinion | satire | prediction
+  claimType  String
+  assessable Boolean @default(true)
+
+  verdict Verdict?
+}
+
+model Verdict {
+  id        String  @id @default(cuid())
+  claimId   String  @unique
+  claim     Claim   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  // Supported | Contradicted | Misleading | Unverified | NotAssessable
+  label     String
+  confidence Float  @default(0)
+  abstained Boolean @default(false)
+  explanation String
+  provisional Boolean @default(false) // BR-09
+  evidenceAgeDays Int?
+  // JSON: { sensationalism, emotional, hedging, clickbait } — secondary, display-only (BR-07)
+  styleSignals String?
+  sourceReliability Float?
+  modelVersion String
+
+  evidence  Evidence[]
+  reviews   Review[]
+  appeals   Appeal[]
+  feedback  Feedback[]
+}
+
+model Evidence {
+  id        String  @id @default(cuid())
+  verdictId String
+  verdict   Verdict @relation(fields: [verdictId], references: [id], onDelete: Cascade)
+  rank      Int
+  title     String
+  sourceId  String?
+  source    TrustedSource? @relation(fields: [sourceId], references: [id])
+  url       String
+  excerpt   String
+  similarity Float
+  // raw KB rating: true | mostly-true | half-true | barely-true | false | pants-fire
+  kbRating  String
+  speaker   String?
+  context   String?
+}
+
+// ─────────────────────────────── Governance ───────────────────────────────
+
+model Review {
+  id         String   @id @default(cuid())
+  verdictId  String
+  verdict    Verdict  @relation(fields: [verdictId], references: [id], onDelete: Cascade)
+  reviewerId String
+  reviewer   User     @relation(fields: [reviewerId], references: [id])
+  // 1 = first review, 2 = mandatory second review for high-impact (BR-12)
+  round      Int      @default(1)
+  // accept | edit | reject  (BR-11)
+  action     String
+  finalLabel String?
+  notes      String?
+  createdAt  DateTime @default(now())
+}
+
+model Appeal {
+  id            String    @id @default(cuid())
+  verdictId     String
+  verdict       Verdict   @relation(fields: [verdictId], references: [id], onDelete: Cascade)
+  appellantName String
+  appellantEmail String?
+  reason        String
+  // open | in_review | resolved_upheld | resolved_overturned
+  status        String    @default("open")
+  resolutionNotes String?
+  resolverId    String?
+  resolver      User?     @relation("appealResolver", fields: [resolverId], references: [id])
+  createdAt     DateTime  @default(now())
+  resolvedAt    DateTime?
+}
+
+model Feedback {
+  id             String   @id @default(cuid())
+  verdictId      String
+  verdict        Verdict  @relation(fields: [verdictId], references: [id], onDelete: Cascade)
+  reviewerId     String
+  reviewer       User     @relation(fields: [reviewerId], references: [id])
+  agree          Boolean
+  correctedLabel String?
+  notes          String?
+  createdAt      DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  // analysis_created | review_submitted | appeal_filed | appeal_resolved |
+  // feedback_recorded | source_updated | auth_event | dedup_reused | engine_degraded
+  action     String
+  entityType String
+  entityId   String
+  detail     String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────── Trust registry ───────────────────────────────
+
+model TrustedSource {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  domain           String   @unique
+  // fact_check | wire_service | official_records | news
+  category         String
+  reliabilityScore Float    @default(0.8)
+  approved         Boolean  @default(true)
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  evidence Evidence[]
+}
