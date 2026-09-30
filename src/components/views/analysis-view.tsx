@@ -12,30 +12,11 @@ import { useSession } from "next-auth/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format, formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Check,
-  ChevronDown,
-  Clock,
-  CopyPlus,
-  Download,
-  FileSearch,
-  FolderSearch,
-  Gavel,
-  ListChecks,
-  Loader2,
-  MessageSquareWarning,
-  PenLine,
-  RotateCw,
-  ShieldAlert,
-  ThumbsDown,
-  ThumbsUp,
-  X,
-} from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Clock, CopyPlus, Download, FileSearch, FolderSearch, Gavel, ListChecks, Loader2, ListTree, MessageSquareWarning, PenLine, RotateCw, ShieldAlert, ThumbsDown, ThumbsUp, X } from "lucide-react";
 
 import { fileAppeal, fetchAnalysis, submitFeedback, submitReview } from "@/lib/api";
 import { downloadReport } from "@/lib/report";
-import { ALL_LABELS, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
+import { ALL_LABELS, isVerdictLabel, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { effectiveLabel } from "@/types/api";
@@ -164,6 +145,8 @@ export function AnalysisView() {
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
       <DossierHeader analysis={analysis} anyProvisional={anyProvisional} />
 
+      {claims.length > 1 && <ClaimNavigator claims={claims} />}
+
       <section aria-label="Claim-by-claim analysis" className="mt-6 space-y-6">
         {claims.map((claim, index) => (
           <ClaimCard
@@ -214,7 +197,118 @@ export function AnalysisView() {
   );
 }
 
-/* ────────────────────────────── Header ────────────────────────────── */
+/* ───────────────────────── Claim navigator ───────────────────────── */
+
+/**
+ * ClaimNavigator — sticky mini-TOC for multi-claim dossiers. One chip per
+ * claim with a verdict-coloured dot; the chip scrolls to the claim and the
+ * active chip tracks scroll position. Evidence-first ordering is untouched:
+ * this only aids navigation within the dossier (BR-12 ergonomics).
+ */
+function ClaimNavigator({ claims }: { claims: ClaimDTO[] }) {
+  const [active, setActive] = useState<number>(0);
+
+  useEffect(() => {
+    const scroller = document.getElementById("main-content");
+    if (!scroller) return;
+
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const scrollerRect = scroller.getBoundingClientRect();
+        let best = 0;
+        let bestDistance = Infinity;
+        for (const claim of claims) {
+          const el = document.getElementById(`claim-${claim.position}`);
+          if (!el) continue;
+          const distance = Math.abs(el.getBoundingClientRect().top - scrollerRect.top - 12);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = claim.position;
+          }
+        }
+        setActive(best);
+      });
+    };
+
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [claims]);
+
+  const scrollToClaim = (position: number | null) => {
+    if (position === null) {
+      document.getElementById("main-content")?.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    document
+      .getElementById(`claim-${position}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  return (
+    <nav
+      aria-label="Claim navigator"
+      className="sticky top-0 z-10 -mx-4 mt-4 border-b border-zinc-800/70 bg-zinc-950/90 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6"
+    >
+      <div className="flex items-center gap-2 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <span className="flex shrink-0 items-center gap-1.5 pr-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+          <ListTree className="size-3.5" aria-hidden />
+          {claims.length} claims
+        </span>
+        <button
+          type="button"
+          onClick={() => scrollToClaim(null)}
+          title="Scroll to the dossier overview"
+          className="shrink-0 rounded-full border border-zinc-800 bg-zinc-900/60 px-2.5 py-1 text-[11px] font-medium text-zinc-500 transition-colors hover:border-zinc-600 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.97]"
+        >
+          Overview
+        </button>
+        {claims.map((claim) => {
+          const label = claim.verdict?.label ?? null;
+          const meta = label && isVerdictLabel(label) ? LABEL_META[label] : null;
+          const isActive = active === claim.position;
+          return (
+            <button
+              key={claim.id}
+              type="button"
+              onClick={() => scrollToClaim(claim.position)}
+              aria-current={isActive ? "true" : undefined}
+              className={cn(
+                "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.97]",
+                isActive
+                  ? "border-zinc-600 bg-zinc-800/80 text-zinc-100 shadow-sm"
+                  : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-zinc-600 hover:text-zinc-200"
+              )}
+            >
+              <span className="font-mono text-[10px] text-zinc-500">
+                #{String(claim.position + 1).padStart(2, "0")}
+              </span>
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 rounded-full",
+                  meta ? meta.dot : "bg-zinc-600"
+                )}
+              />
+              <span className="capitalize">{claim.claimType}</span>
+              {!claim.assessable && (
+                <span className="text-[10px] text-zinc-600">(excl.)</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+/* ───────────────────────── Header ───────────────────────── */
 
 function DossierHeader({ analysis, anyProvisional }: { analysis: AnalysisDTO; anyProvisional: boolean }) {
   return (
@@ -349,10 +443,11 @@ function ClaimCard({
 
   return (
     <motion.article
+      id={`claim-${claim.position}`}
       initial={{ opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, delay: Math.min(index * 0.06, 0.3), ease: "easeOut" }}
-      className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6"
+      className="scroll-mt-3 rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 sm:p-6"
       aria-label={`Claim ${claim.position + 1}`}
     >
       {/* claim header */}

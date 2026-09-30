@@ -20,14 +20,21 @@ import { VerdictBadge } from "@/components/verdict/verdict-badge";
 import { VeritasLogo } from "@/components/veritas-logo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-const NAV: { id: ViewId; label: string; icon: typeof FileSearch; hint?: string }[] = [
-  { id: "home", label: "Analyze", icon: Sparkles },
-  { id: "review", label: "Review queue", icon: BookOpenCheck, hint: "queue" },
-  { id: "analytics", label: "Analytics", icon: ChartColumn },
-  { id: "appeals", label: "Appeals", icon: ScrollText },
-  { id: "audit", label: "Audit log", icon: History },
-  { id: "sources", label: "Sources", icon: SquareLibrary },
-  { id: "model-card", label: "Model card", icon: ShieldCheck },
+const NAV: {
+  id: ViewId;
+  label: string;
+  icon: typeof FileSearch;
+  hint?: string;
+  /** g-key sequence for the jump-to-view shortcut */
+  gKey?: string;
+}[] = [
+  { id: "home", label: "Analyze", icon: Sparkles, gKey: "h" },
+  { id: "review", label: "Review queue", icon: BookOpenCheck, hint: "queue", gKey: "r" },
+  { id: "analytics", label: "Analytics", icon: ChartColumn, gKey: "a" },
+  { id: "appeals", label: "Appeals", icon: ScrollText, gKey: "e" },
+  { id: "audit", label: "Audit log", icon: History, gKey: "u" },
+  { id: "sources", label: "Sources", icon: SquareLibrary, gKey: "s" },
+  { id: "model-card", label: "Model card", icon: ShieldCheck, gKey: "m" },
 ];
 
 export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -83,7 +90,7 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
               onClick={() => go(item.id)}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
+                "group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-[13px] font-medium transition-colors active:scale-[0.99]",
                 active
                   ? "bg-zinc-800/70 text-zinc-100"
                   : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
@@ -128,6 +135,18 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
                   <span className="rounded-full border border-zinc-700/60 bg-zinc-800/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
                     human
                   </span>
+                </span>
+              )}
+              {item.id !== "review" && item.gKey && (
+                <span
+                  className={cn(
+                    "ml-auto hidden items-center gap-0.5 opacity-0 transition-opacity group-focus-visible:opacity-100 xl:inline-flex",
+                    active ? "opacity-60" : "group-hover:opacity-70"
+                  )}
+                  aria-hidden
+                >
+                  <kbd className="veritas-kbd h-4! min-w-4! text-[9px]!">g</kbd>
+                  <kbd className="veritas-kbd h-4! min-w-4! text-[9px]!">{item.gKey}</kbd>
                 </span>
               )}
             </button>

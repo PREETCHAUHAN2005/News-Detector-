@@ -1,9 +1,10 @@
 "use client";
 /** Cited evidence list (BR-03): retrieved fact-checks with similarity,
     rating and source link. Rendered BEFORE the model verdict in the
-    analysis view (anti-automation-bias, BRD §12). */
+    analysis view (anti-automation-bias, BRD §12). Each card cross-references
+    the trusted-source registry to show the evidence domain's reliability. */
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Quote, UserRound } from "lucide-react";
+import { BadgeCheck, Check, Copy, ExternalLink, Quote, ShieldCheck, UserRound } from "lucide-react";
 import type { EvidenceDTO } from "@/types/api";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,16 @@ const RATING_STYLE: Record<string, string> = {
   "barely-true": "text-orange-400 border-orange-500/40 bg-orange-500/10",
   false: "text-rose-400 border-rose-500/40 bg-rose-500/10",
   "pants-fire": "text-rose-400 border-rose-500/40 bg-rose-500/10",
+};
+
+/** Rating-coloured left accent for evidence cards — verdict tone readable at a glance. */
+const RATING_ACCENT: Record<string, string> = {
+  true: "border-l-emerald-400/70",
+  "mostly-true": "border-l-emerald-400/70",
+  "half-true": "border-l-amber-400/70",
+  "barely-true": "border-l-orange-400/70",
+  false: "border-l-rose-400/70",
+  "pants-fire": "border-l-rose-400/70",
 };
 
 const RATING_LABEL: Record<string, string> = {
@@ -37,6 +48,40 @@ function citationText(evidence: EvidenceDTO): string {
     evidence.url,
   ].filter((p): p is string => p !== null);
   return parts.join(" · ");
+}
+
+/** Reliability tier styling for the trusted-source chip. */
+function reliabilityTier(score: number): { className: string; label: string } {
+  if (score >= 0.9)
+    return { className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-400", label: "high" };
+  if (score >= 0.75)
+    return { className: "border-teal-500/40 bg-teal-500/10 text-teal-300", label: "strong" };
+  if (score >= 0.5)
+    return { className: "border-amber-500/40 bg-amber-500/10 text-amber-400", label: "moderate" };
+  return { className: "border-zinc-700 bg-zinc-800/60 text-zinc-400", label: "low" };
+}
+
+/** Trusted-source chip (BR-03): evidence domain + registry reliability. */
+function SourceChip({ source }: { source: NonNullable<EvidenceDTO["source"]> }) {
+  const score = typeof source.reliabilityScore === "number" ? source.reliabilityScore : null;
+  const tier = score !== null ? reliabilityTier(score) : null;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700/60 bg-zinc-800/50 px-2 py-0.5 text-[11px] text-zinc-400"
+      title={`Trusted-source registry (BR-03): ${source.name ?? "source"}${score !== null ? ` — reliability ${Math.round(score * 100)}%` : ""}${source.category ? ` · category: ${source.category}` : ""}`}
+    >
+      <ShieldCheck className="size-3 text-emerald-400/90" aria-hidden />
+      <span className="font-mono">{source.domain ?? source.name ?? "source"}</span>
+      {tier && score !== null && (
+        <span
+          className={cn("rounded-full border px-1.5 py-px text-[10px] font-medium", tier.className)}
+          title={`${tier.label} reliability tier`}
+        >
+          {Math.round(score * 100)}% rel.
+        </span>
+      )}
+    </span>
+  );
 }
 
 export function EvidenceCard({
@@ -67,8 +112,10 @@ export function EvidenceCard({
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
-        "group block rounded-lg border border-zinc-800 bg-zinc-900/70 p-3.5 transition-all duration-200",
+        "group block rounded-lg border border-zinc-800 border-l-2 bg-zinc-900/70 p-3.5 pl-4 transition-all duration-200",
         "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/90 hover:shadow-lg hover:shadow-black/25",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:translate-y-0 active:scale-[0.99]",
+        RATING_ACCENT[evidence.kbRating] ?? "border-l-zinc-600",
         compact && "p-3"
       )}
       aria-label={`Evidence ${evidence.rank}: ${evidence.title}`}
@@ -144,6 +191,18 @@ export function EvidenceCard({
             </span>
           )}
           {evidence.context && <span className="italic">{evidence.context}</span>}
+        </p>
+      )}
+      {/* trusted-source cross-reference (BR-03) — registry reliability of the evidence domain */}
+      {evidence.source && !compact && (
+        <p className="mt-2 flex flex-wrap items-center gap-2">
+          <SourceChip source={evidence.source} />
+          {evidence.source.approved && (
+            <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400/80">
+              <BadgeCheck className="size-3" aria-hidden />
+              approved source
+            </span>
+          )}
         </p>
       )}
     </a>

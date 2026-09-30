@@ -267,7 +267,7 @@ export function HomeView() {
                 <Button
                   type="submit"
                   disabled={!text.trim() || analyzing}
-                  className="h-10 w-full gap-2.5 rounded-lg font-medium sm:w-auto"
+                  className="h-10 w-full gap-2.5 rounded-lg font-medium transition-transform active:scale-[0.98] sm:w-auto"
                 >
                   {analyzing ? (
                     <>
@@ -324,7 +324,7 @@ export function HomeView() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.25, delay: 0.04 * index, ease: "easeOut" }}
                   onClick={() => applySuggestion(suggestion)}
-                  className="group flex h-full min-h-32 flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-900/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                  className="group flex h-full min-h-32 flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-zinc-600 hover:bg-zinc-900/70 hover:shadow-lg hover:shadow-black/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.99] active:translate-y-0"
                 >
                   <div className="flex items-center gap-2">
                     {suggestion.kind === "fact_checked" ? (

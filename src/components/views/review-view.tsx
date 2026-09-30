@@ -4,32 +4,15 @@
  * Card-based queue (evidence-heavy dossiers don't fit tables) with search,
  * status/verdict filters and pagination. Opening a card opens the analysis
  * dossier, where evidence is always shown before the model verdict.
+ * Keyboard-first triage: j/k (or ↑/↓) walk the queue, Enter/o opens.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
-import {
-  BookmarkCheck,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  CopyPlus,
-  Eye,
-  FolderSearch,
-  Gavel,
-  Inbox,
-  Layers,
-  RotateCw,
-  Search,
-  ShieldAlert,
-  ShieldCheck,
-  Tag,
-  UserRound,
-} from "lucide-react";
+import { BookmarkCheck, Check, ChevronLeft, ChevronRight, Clock, CopyPlus, Eye, FolderSearch, Gavel, Inbox, Layers, MousePointerClick, RotateCw, Search, ShieldAlert, ShieldCheck, Tag, UserRound } from "lucide-react";
 
 import { fetchAnalyses } from "@/lib/api";
 import { ALL_LABELS, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
@@ -124,6 +107,9 @@ export function ReviewView() {
   const [label, setLabel] = useState(saved.label);
   const [highImpactOnly, setHighImpactOnly] = useState(saved.highImpactOnly);
   const [page, setPage] = useState(1);
+  /** keyboard-selected row (j/k) — null until the first keypress */
+  const [selected, setSelected] = useState<number | null>(null);
+  const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   // debounce the search box (~300ms); typing always restarts pagination
   useEffect(() => {
@@ -159,6 +145,56 @@ export function ReviewView() {
 
   const analyses = data?.analyses ?? [];
   const total = data?.total ?? 0;
+
+  /* j/k/Enter keyboard triage — enabled once rows are on screen. Selection
+   * is an index into the current page; any filter/page change clamps it. */
+  const clampedSelected =
+    selected === null ? null : Math.min(selected, Math.max(0, analyses.length - 1));
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === "j" || event.key === "ArrowDown") {
+        if (analyses.length === 0) return;
+        event.preventDefault();
+        setSelected((prev) => {
+          const next = prev === null ? 0 : Math.min(prev + 1, analyses.length - 1);
+          cardRefs.current[next]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          return next;
+        });
+      } else if (key === "k" || event.key === "ArrowUp") {
+        if (analyses.length === 0) return;
+        event.preventDefault();
+        setSelected((prev) => {
+          const next = prev === null ? analyses.length - 1 : Math.max(prev - 1, 0);
+          cardRefs.current[next]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          return next;
+        });
+      } else if (key === "enter" || key === "o") {
+        if (clampedSelected === null) return;
+        // if an actual button is focused, let its native click open instead
+        if (target instanceof HTMLElement && target.tagName === "BUTTON") return;
+        event.preventDefault();
+        const analysis = analyses[clampedSelected];
+        if (analysis) openAnalysis(analysis.id);
+      } else if (event.key === "Escape") {
+        setSelected(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [analyses, clampedSelected, openAnalysis]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // Derive the effective page (clamped) so a shrinking result set can never
@@ -300,6 +336,16 @@ export function ReviewView() {
               </TooltipContent>
             </Tooltip>
           )}
+
+          {/* keyboard triage hint — hidden on touch-sized screens */}
+          <span className="ml-1 hidden items-center gap-1.5 text-[11px] text-zinc-600 md:inline-flex" aria-hidden>
+            <MousePointerClick className="size-3" />
+            <kbd className="veritas-kbd">j</kbd>
+            <kbd className="veritas-kbd">k</kbd>
+            select
+            <kbd className="veritas-kbd">↵</kbd>
+            open
+          </span>
         </div>
       </div>
 
@@ -350,6 +396,10 @@ export function ReviewView() {
               key={analysis.id}
               analysis={analysis}
               index={index}
+              selected={clampedSelected === index}
+              cardRef={(el) => {
+                cardRefs.current[index] = el;
+              }}
               onOpen={() => openAnalysis(analysis.id)}
             />
           ))
@@ -397,10 +447,14 @@ const STATUS_ACCENT: Record<string, string> = {
 function QueueCard({
   analysis,
   index,
+  selected,
+  cardRef,
   onOpen,
 }: {
   analysis: AnalysisDTO;
   index: number;
+  selected: boolean;
+  cardRef: (el: HTMLButtonElement | null) => void;
   onOpen: () => void;
 }) {
   const claims = analysis.claims;
@@ -411,13 +465,21 @@ function QueueCard({
 
   return (
     <motion.button
+      ref={cardRef}
       type="button"
       onClick={onOpen}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.3), ease: "easeOut" }}
-      className="group relative block w-full rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 pl-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-600 hover:bg-zinc-900/70 hover:shadow-lg hover:shadow-black/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60"
+      className={cn(
+        "group relative block w-full rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 pl-5 text-left transition-all duration-200",
+        "hover:-translate-y-0.5 hover:border-zinc-600 hover:bg-zinc-900/70 hover:shadow-lg hover:shadow-black/20",
+        "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60",
+        "active:scale-[0.995]",
+        selected && "border-emerald-500/60 bg-zinc-900/75 ring-1 ring-emerald-500/50 shadow-lg shadow-emerald-950/30"
+      )}
       aria-label={`Open analysis: ${analysis.inputText.slice(0, 80)}`}
+      aria-current={selected ? "true" : undefined}
     >
       {/* status accent bar */}
       <span

@@ -8,6 +8,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { AppTopbar } from "@/components/app-topbar";
 import { CommandPalette } from "@/components/command-palette";
 import { KeyboardShortcuts } from "@/components/shortcuts-help";
+import { GNav } from "@/components/g-nav";
 import { StatusBar } from "@/components/status-bar";
 import { VeritasLogo } from "@/components/veritas-logo";
 import { useAppStore } from "@/lib/store";
@@ -85,6 +86,7 @@ function VeritasApp() {
         <StatusBar />
         <CommandPalette />
         <KeyboardShortcuts />
+        <GNav />
       </div>
     </div>
   );

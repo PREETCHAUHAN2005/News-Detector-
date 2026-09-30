@@ -1,7 +1,8 @@
 "use client";
 /**
  * Operations analytics (BR-16/17) — volume, verdict mix, abstention,
- * overrides, latency percentiles and fairness-by-topic surfacing.
+ * overrides, latency percentiles and fairness-by-topic surfacing with
+ * drill-down from any topic bar into the underlying analyses (BR-17).
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -18,7 +19,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { format } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import {
   AlertTriangle,
   BookOpenCheck,
@@ -26,6 +27,7 @@ import {
   FileSearch,
   Gauge,
   HelpCircle,
+  Loader2,
   RotateCcw,
   ScrollText,
   TrendingDown,
@@ -40,15 +42,25 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Tooltip as UiTooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { fetchAnalytics } from "@/lib/api";
+import { fetchAnalyses, fetchAnalytics } from "@/lib/api";
 import { ALL_LABELS, LABEL_META, TAXONOMY } from "@/lib/taxonomy";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import type { AnalysisDTO } from "@/types/api";
+import { StatusBadge, VerdictBadge } from "@/components/verdict/verdict-badge";
 
 /** Hex palette mirroring LABEL_META (no blue/purple). */
 const LABEL_HEX: Record<string, string> = {
@@ -284,6 +296,8 @@ function ChartTooltip({
 
 export function AnalyticsView() {
   const [days, setDays] = useState<RangeDays>(7);
+  /** fairness drill-down (BR-17): topic opened from the chart */
+  const [drillTopic, setDrillTopic] = useState<string | null>(null);
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["analytics", days],
     queryFn: () => fetchAnalytics(days),
@@ -654,7 +668,7 @@ export function AnalyticsView() {
             </CardDescription>
           </CardHeader>
           <CardContent className="p-4">
-            <div className="h-56" role="img" aria-label="Horizontal bar chart of contradicted share by topic for the top 6 topics">
+            <div className="h-56 cursor-pointer" role="button" tabIndex={0} aria-label="Horizontal bar chart of contradicted share by topic for the top 6 topics. Activate a row to drill into that topic's analyses." onKeyDown={(e) => { if (e.key === "Enter" && fairnessData[0]) setDrillTopic(fairnessData[0].topic); }}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={fairnessData} layout="vertical" margin={{ top: 4, right: 48, left: 4, bottom: 4 }}>
                   <XAxis type="number" domain={[0, 1]} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} tick={{ fontSize: 11, fill: "#a1a1aa" }} axisLine={false} tickLine={false} />
@@ -685,7 +699,17 @@ export function AnalyticsView() {
                       />
                     )}
                   />
-                  <Bar dataKey="contradictedShare" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[0, 3, 3, 0]} maxBarSize={18}>
+                  <Bar
+                    dataKey="contradictedShare"
+                    fill={LABEL_HEX[TAXONOMY.CONTRADICTED]}
+                    radius={[0, 3, 3, 0]}
+                    maxBarSize={18}
+                    onClick={(entry: unknown) => {
+                      // recharts hands over the bar's row payload defensively typed
+                      const topic = (entry as { payload?: { topic?: string } } | null)?.payload?.topic;
+                      if (typeof topic === "string" && topic) setDrillTopic(topic);
+                    }}
+                  >
                     <LabelList
                       dataKey="shareLabel"
                       position="right"
@@ -698,6 +722,30 @@ export function AnalyticsView() {
             <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
               Subgroup gaps are surfaced, not hidden — see known limitations in the model card.
             </p>
+            {/* topic chips — drill-down always reachable, even for zero-share bars */}
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {fairnessData.map((topic) => (
+                <button
+                  key={topic.topic}
+                  type="button"
+                  onClick={() => setDrillTopic(topic.topic)}
+                  title={`Drill into ${topic.topic}: ${topic.total} analyses, ${Math.round(topic.contradictedShare * 100)}% contradicted`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:border-zinc-500 hover:bg-zinc-800/70 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:scale-[0.97]"
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      topic.contradictedShare > 0 ? "bg-rose-400" : "bg-zinc-600"
+                    )}
+                  />
+                  <span className="max-w-32 truncate">{topic.topic}</span>
+                  <span className="font-mono text-[10px] tabular-nums text-zinc-500">
+                    {topic.total}
+                  </span>
+                </button>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </section>
@@ -749,6 +797,102 @@ export function AnalyticsView() {
           </p>
         </CardContent>
       </Card>
+
+      {/* fairness drill-down (BR-17) */}
+      <FairnessDrillDialog topic={drillTopic} onClose={() => setDrillTopic(null)} />
     </div>
+  );
+}
+
+/* ─────────────── Fairness drill-down dialog (BR-17) ─────────────── */
+
+/**
+ * Topic drill-down from the fairness chart — lists every analysis carrying
+ * the selected topic, so reviewers can inspect the subgroup the chart is
+ * surfacing. Opening a row jumps straight to its evidence-first dossier.
+ */
+function FairnessDrillDialog({ topic, onClose }: { topic: string | null; onClose: () => void }) {
+  const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["analyses", "fairness-drill", topic],
+    queryFn: () => fetchAnalyses({ topic: topic ?? "", pageSize: 50 }),
+    enabled: topic !== null,
+  });
+
+  const analyses: AnalysisDTO[] = data?.analyses ?? [];
+  const contradicted = analyses.filter((a) => a.overallLabel === TAXONOMY.CONTRADICTED).length;
+
+  return (
+    <Dialog open={topic !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-lg gap-0 overflow-hidden border-zinc-800 bg-zinc-900/95 p-0 shadow-2xl shadow-black/40 backdrop-blur-xl">
+        <DialogHeader className="border-b border-zinc-800 px-4 py-3">
+          <DialogTitle className="text-sm font-medium text-zinc-100">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Fairness drill-down · topic</span>
+            <span className="mt-1 flex items-center gap-2 text-base font-semibold uppercase tracking-wide text-zinc-100">
+              <ScrollText className="size-4 text-rose-400/80" aria-hidden />
+              {topic ?? ""}
+            </span>
+          </DialogTitle>
+          <DialogDescription className="mt-0.5 text-xs text-zinc-500">
+            The analyses behind this subgroup&apos;s bar (BR-17) — Contradicted {contradicted} of{" "}
+            {analyses.length}.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-[55vh] overflow-y-auto p-2">
+          {isLoading ? (
+            <div className="space-y-2 p-2">
+              <Skeleton className="h-16 rounded-lg" />
+              <Skeleton className="h-16 rounded-lg" />
+              <Skeleton className="h-16 rounded-lg" />
+            </div>
+          ) : isError ? (
+            <p className="p-6 text-center text-sm text-zinc-400">
+              Couldn&apos;t load this topic&apos;s analyses.
+            </p>
+          ) : analyses.length === 0 ? (
+            <p className="p-6 text-center text-sm text-zinc-400">
+              No analyses carry this topic in the current data.
+            </p>
+          ) : (
+            analyses.map((analysis) => (
+              <button
+                key={analysis.id}
+                type="button"
+                onClick={() => {
+                  onClose();
+                  openAnalysis(analysis.id);
+                }}
+                className="group mb-2 block w-full rounded-lg border border-zinc-800 bg-zinc-900/40 p-3.5 text-left transition-all hover:border-zinc-600 hover:bg-zinc-900/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60 active:scale-[0.995]"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge status={analysis.status} />
+                  <VerdictBadge label={analysis.overallLabel} size="sm" />
+                  {analysis.highImpact && (
+                    <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                      High-impact
+                    </span>
+                  )}
+                  <time
+                    dateTime={analysis.createdAt}
+                    className="ml-auto whitespace-nowrap font-mono text-[11px] text-zinc-500"
+                  >
+                    {formatDistanceToNow(new Date(analysis.createdAt), { addSuffix: true })}
+                  </time>
+                </div>
+                <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-zinc-300">
+                  {analysis.inputText}
+                </p>
+              </button>
+            ))
+          )}
+        </div>
+
+        <p className="border-t border-zinc-800 bg-zinc-950/60 px-4 py-2 text-[10px] text-zinc-600">
+          Verdicts are never automated — every row opens the evidence-first dossier for human
+          review (BR-11).
+        </p>
+      </DialogContent>
+    </Dialog>
   );
 }

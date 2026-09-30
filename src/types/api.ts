@@ -23,6 +23,15 @@ export interface EvidenceDTO {
   speaker?: string | null;
   context?: string | null;
   sourceId?: string | null;
+  /** joined trusted-source registry row (BR-03) — present in dossier responses */
+  source?: {
+    id?: string;
+    name?: string;
+    domain?: string;
+    category?: string;
+    reliabilityScore?: number;
+    approved?: boolean;
+  } | null;
 }
 
 export interface ReviewDTO {

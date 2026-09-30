@@ -19,6 +19,7 @@ export async function GET(req: Request) {
     const label = searchParams.get("label") ?? undefined;
     const search = searchParams.get("q") ?? undefined;
     const highImpact = searchParams.get("highImpact");
+    const topic = searchParams.get("topic") ?? undefined;
     const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
     const pageSize = Math.min(50, parseInt(searchParams.get("pageSize") ?? "20", 10) || 20);
 
@@ -26,6 +27,10 @@ export async function GET(req: Request) {
     if (status && status !== "all") where.status = status;
     if (label && label !== "all") where.overallLabel = label;
     if (highImpact === "true") where.highImpact = true;
+    if (topic && topic !== "all") {
+      // fairness drill-down (BR-17): exact topic match, sanitized length
+      where.topic = topic.slice(0, 60);
+    }
     if (search) {
       where.inputText = { contains: search };
     }

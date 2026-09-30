@@ -61,6 +61,8 @@ export function fetchAnalyses(params: {
   label?: string;
   q?: string;
   highImpact?: string;
+  /** fairness drill-down (BR-17): exact topic match */
+  topic?: string;
   page?: number;
   pageSize?: number;
 }) {
@@ -69,6 +71,7 @@ export function fetchAnalyses(params: {
   if (params.label) search.set("label", params.label);
   if (params.q) search.set("q", params.q);
   if (params.highImpact) search.set("highImpact", params.highImpact);
+  if (params.topic) search.set("topic", params.topic);
   search.set("page", String(params.page ?? 1));
   search.set("pageSize", String(params.pageSize ?? 20));
   return jsonFetch<AnalysesListResponse>(`/api/analyses?${search.toString()}`);

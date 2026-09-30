@@ -235,3 +235,27 @@ Stage Summary:
 - Services: Next 3000 + engine 8001 + watchdog (engine auto-restart verified live).
 - Demo accounts: reviewer/senior/admin/viewer @veritas.io / veritas123.
 - Unresolved / next-phase candidates: (1) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design per BRD §14); (2) i18n + live web retrieval remain Phase 4; (3) possible future UX: review-queue j/k keyboard nav, analytics fairness drill-down per topic, palette "recently exported" list; (4) watchdog + dev server still die on full sandbox restart — re-run `setsid bun run scripts/engine-watchdog.ts >> mini-services/nlp-engine/watchdog.log 2>&1 &` and restart dev server if that happens.
+
+---
+Task ID: 13
+Agent: Main (Z.ai Code)
+Task: Round 5 — regression QA (agent-browser) + 5 new features + VLM-driven styling polish
+
+Work Log:
+- Status assessment: all services healthy (Next 3000, engine 8001 w/ watchdog, /api/health ok), lint clean, dev.log clean.
+- agent-browser regression QA (fresh session qa5-*): signin-state → home → analyze novel claim (correct abstention → Unverified, high-impact flag) → dossier → all 9 views → palette → mobile 390×844 (no overflow, footer sticky bottom=vh) → 0 console/page errors. NO BUGS FOUND — phase stable, proceeded to features.
+- FEATURE 1 — Review-queue j/k keyboard triage: selected-card state (emerald ring + aria-current), j/k or ↑/↓ move w/ scrollIntoView(nearest), Enter/o opens (native button focus wins), Esc clears; typing-context guard; kbd hint in filter bar (md+); active:scale press state.
+- FEATURE 2 — Dossier claim navigator (multi-claim only): sticky bar under DossierHeader; chips = #NN + verdict-coloured dot (LABEL_META) + claimType + (excl.) marker + Overview chip; scrollIntoView smooth + rAF-throttled scroll listener tracks active chip (aria-current); claim articles get id=claim-{pos} + scroll-mt-3.
+- FEATURE 3 — Fairness drill-down (BR-17): backend /api/analyses gains validated `topic` param; fetchAnalyses(topic?); analytics fairness chart bar onClick → topic dialog (Contradicted count, analysis rows w/ StatusBadge/VerdictBadge/HighImpact/relative time, click row → evidence-first dossier). UX FIX discovered during QA: most fairness bars are zero-width/unclickable → added always-clickable topic-chip row under the chart (topic + total + rose/zinc dot); native bar click verified too.
+- FEATURE 4 — Global g-key view navigation: new src/components/g-nav.tsx (Gmail-style). g then h/r/a/e/u/s/m within 1.2s → setView; floating "g… then h r a e u s m" chip + destination hint toast (AnimatePresence); Esc cancels; typing/modifier-guarded; sidebar nav items show hover g-key kbd pairs (xl+).
+- FEATURE 5 — Evidence trusted-source chips (BR-03 cross-ref): EvidenceDTO.source typed; EvidenceCard renders SourceChip (ShieldCheck + domain + reliability % tiered emerald/teal/amber/zinc + registry tooltip) + "approved source" BadgeCheck note; verified present on both fresh + BR-08 reused evidence.
+- STYLING POLISH (VLM-reviewed): evidence cards get rating-coloured left accent bars (rose false / amber half-true / emerald true) + pl-4; toasts re-themed dark (rounded-lg zinc-900/95 border-zinc-700 backdrop-blur shadow-xl; destructive rose-950); suggestion cards hover lift + shadow + press; composer/nav/queue/chips active:scale feedback; global :focus-visible emerald outline baseline; prefers-reduced-motion guard (pulse/pop + scroll-behavior); drill-dialog header hierarchy (small caption + bold topic) + row padding; sidebar nav press state.
+- Shortcuts help dialog expanded: Global / Jump-to-view (7 g-keys) / Composer / Palette / Review queue (j,k,↵,o,esc) / Dossier sections.
+- Verification: lint clean; scoped tsc clean; all features browser-verified end-to-end (g+r/g+a/g+h nav, j→j→k→Enter flow, claim chip scroll + active tracking, source chips, both drill-down entry paths, export toast); fresh reload no errors; mobile 390×844 no overflow + topic chips + claim navigator OK; VLM re-review 9/10 (evidence accents + reliability chips "reduce cognitive load").
+- QA screenshots: docs/qa/qa5-00…qa5-22-*.png.
+
+Stage Summary:
+- 0 bugs in regression QA; 5 new features (j/k queue triage, claim navigator, fairness drill-down w/ topic chips, g-key global nav, source-reliability chips) + 1 UX fix (zero-width fairness bars unclickable → topic chips).
+- All BRD safety properties re-verified intact (evidence-first ordering, abstention on novel claims, BR-08 reuse Contradicted 93%, human-review gates untouched).
+- Services: Next 3000 + engine 8001 + watchdog all healthy.
+- Unresolved / next-phase candidates: (1) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design per BRD §14); (2) i18n + live web retrieval remain Phase 4; (3) possible future UX: palette mid-typing recents refresh, dossier metadata as icon-pills (VLM suggestion, deferred — mono row is a deliberate design), analytics KPI tile links to drill views; (4) watchdog + dev server still die on full sandbox restart — re-run `setsid bun run scripts/engine-watchdog.ts >> mini-services/nlp-engine/watchdog.log 2>&1 &` and restart dev server if that happens.

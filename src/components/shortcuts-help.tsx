@@ -23,6 +23,18 @@ const SECTIONS: { title: string; rows: ShortcutRow[] }[] = [
     ],
   },
   {
+    title: "Jump to a view (g then key)",
+    rows: [
+      { keys: ["g", "h"], description: "Analyze (home)" },
+      { keys: ["g", "r"], description: "Review queue" },
+      { keys: ["g", "a"], description: "Operations analytics" },
+      { keys: ["g", "e"], description: "Appeals" },
+      { keys: ["g", "u"], description: "Audit log" },
+      { keys: ["g", "s"], description: "Trusted-source registry" },
+      { keys: ["g", "m"], description: "Model card & release gates" },
+    ],
+  },
+  {
     title: "Composer",
     rows: [
       { keys: ["⌘", "↩"], description: "Verify the statement with evidence (Ctrl ↩ on Windows/Linux)" },
@@ -33,6 +45,20 @@ const SECTIONS: { title: string; rows: ShortcutRow[] }[] = [
     rows: [
       { keys: ["↑", "↓"], description: "Move the selection" },
       { keys: ["↵"], description: "Open the selected view, analysis or action" },
+    ],
+  },
+  {
+    title: "Review queue",
+    rows: [
+      { keys: ["j", "k"], description: "Select the next / previous card (or ↑/↓)" },
+      { keys: ["↵", "o"], description: "Open the selected analysis dossier" },
+      { keys: ["esc"], description: "Clear the selection" },
+    ],
+  },
+  {
+    title: "Analysis dossier",
+    rows: [
+      { keys: ["click"], description: "Claim chips scroll between claims (multi-claim dossiers)" },
     ],
   },
 ];
@@ -101,7 +127,8 @@ export function KeyboardShortcuts() {
           ))}
         </div>
         <p className="border-t border-zinc-800 bg-zinc-950/60 px-4 py-2 text-[10px] text-zinc-600">
-          Evidence first, verdict second — shortcuts never bypass human review (BR-11).
+          Evidence first, verdict second — shortcuts accelerate navigation, never bypass human
+          review (BR-11).
         </p>
       </DialogContent>
     </Dialog>
