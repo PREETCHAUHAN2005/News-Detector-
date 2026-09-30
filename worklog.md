@@ -154,3 +154,30 @@ Unresolved / known risks (priority order):
 2. Release gates honestly not all met yet (macro-F1 0.70 vs 0.85 target, contradicted precision 83% vs 95%) — displayed as failing in the Model Card, consistent with shadow-mode deployment (BRD §14 Phase 2).
 3. Abstention rate is high on novel claims by design (BRD §6.2) — evidence KB covers US politics 2007-2016 only.
 4. Next steps for future phases: live web retrieval, additional languages (Phase 4), larger KB, reviewer-side batch import.
+
+---
+Task ID: 10
+Agent: Main (Z.ai Code)
+Task: Autonomous QA round (agent-browser) → bug fixes + styling polish + new features
+
+Work Log:
+- Assessed status: Next.js 3000 + Python NLP engine 8001 + SQLite all healthy (/api/health ok); dev.log + lint clean.
+- Full agent-browser QA pass (fresh session): signin → home → analyze (novel claim abstain path) → dossier → review queue (filters/pagination) → analytics → appeals → audit → model-card → mobile 390×844 (no overflow, nav sheet ok).
+- VLM screenshot review (before): home 7.5/10, dossier 8.0/10 with concrete improvement list.
+- FIXED Bug 1 — topbar showed "engine offline" forever after login: AppTopbar's model-card query fired pre-auth → 401 → error state stuck (retry:false, staleTime 5min). Fix: query now `enabled: status === "authenticated"`; badge shows emerald pulse dot + modelVersion when online, amber "engine offline" when card missing.
+- FIXED Bug 2 — NaN in ConfidenceGauge: THRESHOLDS lacks Unverified/NotAssessable → undefined threshold → NaN SVG line coords (4 console errors) + "Below the NaN% safety bar" text. Fix: thresholdFor() returns null for bar-less labels; marker line + captions conditional; ConfidenceBar title fixed too. Captions now: "Abstained by design — no evidence bar met; routed for human review" / "Routed for human review — no automated decision bar applies".
+- FIXED Bug 3 — status bar trust-note clipped at right edge: proper min-w-0/flex-1/truncate + title tooltip + xl: gating; left cluster items shrink-0.
+- FIXED pre-existing tsc errors in /api/analytics (latencyMs possibly-null filter now type-guarded).
+- STYLING (per VLM review): sidebar active items get emerald left accent bar + refined hover + gap-3 spacing; recents show "Open →" affordance on hover + ⌘K hint in header row; composer gets inset top highlight + emerald focus glow (0_0_28px shadow) + char counter "x / 20,000" + ⌘↩ kbd chip on submit; evidence cards: bg elevation, hover -translate-y-0.5 + shadow + border-zinc-700; topic meta rendered as bordered chip; removed redundant "confidence N%" duplication in dossier header (bar already shows %); globals.css adds .veritas-surface, .veritas-kbd (kbd chip), .veritas-pop animation, h1/h2 text-wrap balance.
+- FEATURE 1 — Command palette (Cursor-style ⌘K/Ctrl+K): new src/components/command-palette.tsx; global hotkey (auth-gated), topbar "Search… ⌘K" trigger button, zustand paletteOpen state; fuzzy filter over 7 nav targets + 8 recent analyses (shares sidebar-recent query cache); full keyboard nav (↑↓ wrap-around, ↵ select, esc close), selected row w/ emerald icon tile + verdict dot + ↵ kbd; footer hint bar. Mount-fresh PaletteBody sub-component pattern (no set-state-in-effect; lint clean). Works on mobile too.
+- FEATURE 2 — Copy citation on evidence cards: hover-reveal ghost button (stopPropagation/preventDefault inside the <a> card), copies formatted citation (quote · ruling · speaker · context · match% · URL) to clipboard, icon swaps to check for 1.8s, graceful catch when clipboard unavailable.
+- FEATURE 3 — Export report on analysis dossier: builds full Markdown dossier client-side (meta, input, per-claim evidence-first listing, model recommendation + why, style signals, human review history w/ roles, shadow-mode disclaimer) → Blob download veritas-report-{id8}.md + toast. No backend change.
+- FEATURE 4 — ⌘↩/Ctrl+↩ submits the composer from the textarea.
+- Verification: lint clean; tsc clean (src); dev.log clean; browser re-test of every fix/feature in fresh sessions (badge post-login ✓, gauge captions for Contradicted/Unverified/NotAssessable ✓ no NaN, palette open→filter→Enter→view ✓, palette→analysis ✓, copy citation icon+clipboard ✓, export toast+download ✓, Ctrl+Enter analyze + BR-08 reuse → Contradicted 93% ✓); console error-free; mobile 390×844 no overflow + palette works. VLM re-review after polish: 8.5/10 and 9/10.
+- QA screenshots: docs/qa/qa2-01…qa2-14-*.png.
+
+Stage Summary:
+- 3 bugs fixed (topbar offline badge, NaN gauge, status-bar truncation), 1 pre-existing tsc error set fixed, 4 new features (⌘K palette, copy citation, Markdown report export, ⌘↩ submit), comprehensive styling polish round.
+- All BRD safety properties untouched (evidence-first ordering, abstention, BR-08 reuse, reviewer gates verified still working end-to-end).
+- VLM visual scores: 7.5/8.0 → 8.5/9.0.
+- Unresolved / next-phase candidates (priority): (1) engine process supervision (auto-restart if sandbox reboots — manual `cd mini-services/nlp-engine && bun run dev`); (2) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design); (3) possible future UX: review-queue bulk actions, analytics date-range selector, palette "actions" (e.g. sign out), saved filters; (4) i18n + live web retrieval remain Phase 4 per BRD.

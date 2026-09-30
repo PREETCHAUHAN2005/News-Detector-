@@ -19,6 +19,9 @@ interface AppState {
   /** fired after a successful analyze run, so Home can celebrate */
   lastAnalyzedAt: number | null;
   markAnalyzed: () => void;
+  /** ⌘K command palette visibility (topbar button + keyboard shortcut) */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -28,4 +31,6 @@ export const useAppStore = create<AppState>((set) => ({
   openAnalysis: (id) => set({ view: "analysis", activeAnalysisId: id }),
   lastAnalyzedAt: null,
   markAnalyzed: () => set({ lastAnalyzedAt: Date.now() }),
+  paletteOpen: false,
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
 }));

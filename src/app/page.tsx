@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Providers } from "@/components/providers";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppTopbar } from "@/components/app-topbar";
+import { CommandPalette } from "@/components/command-palette";
 import { StatusBar } from "@/components/status-bar";
 import { VeritasLogo } from "@/components/veritas-logo";
 import { useAppStore } from "@/lib/store";
@@ -68,6 +69,7 @@ function VeritasApp() {
           <SessionGate />
         </main>
         <StatusBar />
+        <CommandPalette />
       </div>
     </div>
   );

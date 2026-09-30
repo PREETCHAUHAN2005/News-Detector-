@@ -1,11 +1,12 @@
 "use client";
 /** Top bar — Cursor-style context selectors + user menu. */
 import { useState } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, LogOut, Menu, Settings2, ShieldAlert } from "lucide-react";
+import { ChevronDown, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
 import { fetchModelCard } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
+import { useAppStore } from "@/lib/store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,16 +21,21 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { VeritasLogo } from "@/components/veritas-logo";
 
 export function AppTopbar({ title }: { title: string }) {
-  const { data: session } = useSessionSafe();
+  const { data: session, status } = useSession();
   const [mobileNav, setMobileNav] = useState(false);
+  const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
+  const authenticated = status === "authenticated";
   const { data: cardData } = useQuery({
     queryKey: ["model-card"],
     queryFn: fetchModelCard,
     staleTime: 5 * 60_000,
     retry: false,
+    // The badge needs an authenticated /api/model-card call — only fetch once
+    // signed in, otherwise the 401 error state would stick ("engine offline").
+    enabled: status === "authenticated",
   });
   const modelVersion =
-    (cardData?.card as { modelVersion?: string } | null)?.modelVersion ?? "engine offline";
+    (cardData?.card as { modelVersion?: string } | null)?.modelVersion ?? null;
   const user = session?.user as { name?: string | null; email?: string | null; role?: string } | undefined;
   const initials = (user?.name ?? "U")
     .split(" ")
@@ -60,17 +66,40 @@ export function AppTopbar({ title }: { title: string }) {
           <VeritasLogo className="size-4 shrink-0 lg:hidden" />
           <span className="truncate font-medium text-zinc-200">{title}</span>
         </div>
+        {authenticated && (
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            title="Search views and analyses (⌘K)"
+            aria-label="Open command palette (Command K)"
+            className="ml-1 hidden h-7 items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 pl-2 pr-1 text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300 sm:flex"
+          >
+            <Search className="size-3.5" aria-hidden />
+            <span className="text-xs">Search…</span>
+            <kbd className="veritas-kbd">⌘K</kbd>
+          </button>
+        )}
       </div>
 
       {/* right: context selectors + profile */}
       <div className="flex shrink-0 items-center gap-2">
-        <span
-          className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 font-mono text-[11px] text-zinc-400 md:flex"
-          title="Deterministic retrieval-augmented engine version"
-        >
-          <ShieldAlert className="size-3 text-emerald-400" aria-hidden />
-          {modelVersion}
-        </span>
+        {modelVersion ? (
+          <span
+            className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 font-mono text-[11px] text-zinc-400 md:flex"
+            title="Deterministic retrieval-augmented engine version"
+          >
+            <span className="size-1.5 rounded-full bg-emerald-400 veritas-pulse" aria-hidden />
+            {modelVersion}
+          </span>
+        ) : (
+          <span
+            className="hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 font-mono text-[11px] text-amber-300 md:flex"
+            title="Engine unreachable — analyses degrade safely to Unverified and queue for human review"
+          >
+            <ShieldAlert className="size-3" aria-hidden />
+            engine offline
+          </span>
+        )}
         <span
           className="hidden items-center gap-1 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-300 sm:flex"
           title="Phase 2 deployment: recommendations shown to reviewers only"
@@ -116,10 +145,4 @@ export function AppTopbar({ title }: { title: string }) {
       </div>
     </header>
   );
-}
-
-// small wrapper to avoid an extra import cycle
-import { useSession } from "next-auth/react";
-function useSessionSafe() {
-  return useSession();
 }

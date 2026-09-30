@@ -48,7 +48,10 @@ export async function GET() {
         }),
       ]);
 
-    const latencies = latencyAgg.map((a) => a.latencyMs).filter((x) => x > 0).sort((a, b) => a - b);
+    const latencies = latencyAgg
+      .map((a) => a.latencyMs)
+      .filter((x): x is number => typeof x === "number" && x > 0)
+      .sort((a, b) => a - b);
     const totalReviews = reviewsAgg.reduce((s, r) => s + r._count._all, 0);
     const overrides = reviewsAgg
       .filter((r) => r.action === "edit" || r.action === "reject")

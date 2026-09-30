@@ -35,23 +35,26 @@ export function StatusBar() {
       className="flex h-8 shrink-0 items-center justify-between gap-4 border-t border-zinc-800/80 bg-zinc-950/95 px-3 text-[11px] text-zinc-500"
       role="contentinfo"
     >
-      <div className="flex min-w-0 items-center gap-4">
-        <span className="flex items-center gap-1.5" title="NLP engine status">
+      <div className="flex min-w-0 flex-1 items-center gap-4">
+        <span className="flex shrink-0 items-center gap-1.5" title="NLP engine status">
           <Radio
             className={`size-3 ${engineOk ? "text-emerald-400 veritas-pulse" : "text-rose-400"}`}
             aria-hidden
           />
           <span className="hidden sm:inline">Engine {engineOk ? "online" : "offline (fail-safe)"}</span>
         </span>
-        <span className="hidden items-center gap-1.5 sm:flex" title="Database status">
+        <span className="hidden shrink-0 items-center gap-1.5 sm:flex" title="Database status">
           <Database className={`size-3 ${dbOk ? "text-emerald-400" : "text-rose-400"}`} aria-hidden />
           DB {dbOk ? "ok" : "down"}
         </span>
-        <span className="hidden items-center gap-1.5 md:flex" title="Current view">
+        <span className="hidden shrink-0 items-center gap-1.5 lg:flex" title="Current view">
           <Activity className="size-3 text-zinc-400" aria-hidden />
           {view}
         </span>
-        <span className="truncate text-zinc-600">
+        <span
+          className="hidden min-w-0 flex-1 truncate text-zinc-600 xl:inline"
+          title="Veritas never labels content automatically — a reviewer confirms every verdict."
+        >
           Veritas never labels content automatically — a reviewer confirms every verdict.
         </span>
       </div>

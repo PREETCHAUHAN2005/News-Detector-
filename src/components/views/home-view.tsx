@@ -112,6 +112,16 @@ export function HomeView() {
     analyzeMutation.mutate(trimmed);
   }
 
+  /** ⌘↩ / Ctrl+↩ submits from anywhere inside the composer. */
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>): void {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      const trimmed = text.trim();
+      if (!trimmed || analyzing) return;
+      analyzeMutation.mutate(trimmed);
+    }
+  }
+
   function applySuggestion(suggestion: SuggestionDTO): void {
     setText(suggestion.text);
     document.getElementById("main-content")?.scrollTo({ top: 0, behavior: "smooth" });
@@ -131,7 +141,7 @@ export function HomeView() {
           transition={{ duration: 0.3, ease: "easeOut" }}
           aria-label="Welcome"
         >
-          <h1 className="text-2xl font-semibold text-zinc-100">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
             <span className="mr-1.5 inline-block align-baseline text-amber-300" aria-hidden="true">
               👋
             </span>
@@ -156,8 +166,9 @@ export function HomeView() {
           <form onSubmit={handleSubmit}>
             <div
               className={cn(
-                "overflow-hidden rounded-xl border bg-zinc-900/50 transition-colors",
-                "border-zinc-800 focus-within:border-emerald-500/40 focus-within:ring-2 focus-within:ring-emerald-500/20"
+                "overflow-hidden rounded-xl border bg-zinc-900/50 transition-all duration-200",
+                "border-zinc-800 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]",
+                "focus-within:border-emerald-500/40 focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),0_0_28px_-8px_rgba(16,185,129,0.35)]"
               )}
             >
               <label htmlFor="composer-input" className="sr-only">
@@ -168,6 +179,7 @@ export function HomeView() {
                 ref={textareaRef}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onKeyDown={handleComposerKeyDown}
                 placeholder="Paste a news article, headline, or claim to verify…"
                 aria-describedby="composer-hint"
                 className="min-h-[120px] resize-y border-0 bg-transparent px-4 pt-4 text-[15px] leading-relaxed text-zinc-100 shadow-none outline-none placeholder:text-zinc-600 focus-visible:border-0 focus-visible:ring-0"
@@ -199,14 +211,15 @@ export function HomeView() {
 
                 <span
                   className={cn("ml-auto font-mono text-[11px] tabular-nums", counterClass)}
+                  title="Analyses accept up to 60,000 characters (safety-capped)"
                 >
-                  {charCount.toLocaleString()} chars
+                  {charCount.toLocaleString()} / 20,000
                 </span>
 
                 <Button
                   type="submit"
                   disabled={!text.trim() || analyzing}
-                  className="h-10 w-full rounded-lg font-medium sm:w-auto"
+                  className="h-10 w-full gap-2.5 rounded-lg font-medium sm:w-auto"
                 >
                   {analyzing ? (
                     <>
@@ -217,6 +230,9 @@ export function HomeView() {
                     <>
                       <Sparkles className="size-4" aria-hidden="true" />
                       Verify with evidence
+                      <kbd className="veritas-kbd ml-1 hidden sm:inline-flex" aria-hidden>
+                        ⌘↩
+                      </kbd>
                     </>
                   )}
                 </Button>

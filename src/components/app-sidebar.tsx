@@ -56,35 +56,54 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
       </div>
 
       {/* Nav */}
-      <nav className="space-y-0.5 px-2.5" aria-label="Primary">
-        {NAV.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => go(item.id)}
-            aria-current={view === item.id ? "page" : undefined}
-            className={cn(
-              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-medium transition-colors",
-              view === item.id
-                ? "bg-zinc-800/90 text-zinc-100"
-                : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200"
-            )}
-          >
-            <item.icon className={cn("size-4", view === item.id ? "text-emerald-400" : "text-zinc-500")} aria-hidden />
-            {item.label}
-            {item.id === "review" && (
-              <span className="ml-auto rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-300">
-                human
-              </span>
-            )}
-          </button>
-        ))}
+      <nav className="space-y-1 px-2.5" aria-label="Primary">
+        {NAV.map((item) => {
+          const active = view === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => go(item.id)}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-[13px] font-medium transition-colors",
+                active
+                  ? "bg-zinc-800/70 text-zinc-100"
+                  : "text-zinc-400 hover:bg-zinc-800/40 hover:text-zinc-200"
+              )}
+            >
+              {/* active left accent bar */}
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute left-0 top-1/2 h-4.5 w-0.5 -translate-y-1/2 rounded-full bg-emerald-400 transition-opacity",
+                  active ? "opacity-100" : "opacity-0"
+                )}
+              />
+              <item.icon
+                className={cn("size-4 shrink-0", active ? "text-emerald-400" : "text-zinc-500")}
+                aria-hidden
+              />
+              {item.label}
+              {item.id === "review" && (
+                <span className="ml-auto rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-300">
+                  human
+                </span>
+              )}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Recent analyses */}
       <div className="mt-6 flex min-h-0 flex-1 flex-col px-2.5">
-        <p className="px-2.5 pb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
-          Recent analyses
-        </p>
+        <div className="flex items-center justify-between px-2.5 pb-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+            Recent analyses
+          </p>
+          <kbd className="veritas-kbd" aria-hidden>
+            ⌘K
+          </kbd>
+        </div>
         <div className="min-h-0 flex-1 space-y-1 overflow-y-auto pr-0.5">
           {recent?.analyses.map((a) => (
             <button
@@ -93,12 +112,17 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 openAnalysis(a.id);
                 onNavigate?.();
               }}
-              className="group flex w-full flex-col items-start gap-1 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-zinc-800 hover:bg-zinc-800/50"
+              className="group flex w-full flex-col items-start gap-1 rounded-md border border-transparent px-2.5 py-2 text-left transition-all hover:border-zinc-800 hover:bg-zinc-800/50"
             >
-              <span className="line-clamp-2 w-full text-[12px] leading-snug text-zinc-400 group-hover:text-zinc-200">
+              <span className="line-clamp-2 w-full text-[12px] leading-snug text-zinc-400 transition-colors group-hover:text-zinc-200">
                 {a.inputText}
               </span>
-              <VerdictBadge label={a.overallLabel} size="sm" />
+              <span className="flex w-full items-center justify-between gap-2">
+                <VerdictBadge label={a.overallLabel} size="sm" />
+                <span className="text-[10px] text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100">
+                  Open →
+                </span>
+              </span>
             </button>
           ))}
           {recent && recent.analyses.length === 0 && (

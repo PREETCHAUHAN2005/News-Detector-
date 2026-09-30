@@ -2,7 +2,8 @@
 /** Cited evidence list (BR-03): retrieved fact-checks with similarity,
     rating and source link. Rendered BEFORE the model verdict in the
     analysis view (anti-automation-bias, BRD §12). */
-import { ExternalLink, Quote, UserRound } from "lucide-react";
+import { useState } from "react";
+import { Check, Copy, ExternalLink, Quote, UserRound } from "lucide-react";
 import type { EvidenceDTO } from "@/types/api";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +25,20 @@ const RATING_LABEL: Record<string, string> = {
   "pants-fire": "Pants on Fire",
 };
 
+/** Copy a formatted, citation-ready reference for one evidence row. */
+function citationText(evidence: EvidenceDTO): string {
+  const rating = RATING_LABEL[evidence.kbRating] ?? evidence.kbRating;
+  const parts = [
+    `"${evidence.excerpt}"`,
+    `— PolitiFact ruling: ${rating}`,
+    evidence.speaker ? `speaker: ${evidence.speaker}` : null,
+    evidence.context ? `context: ${evidence.context}` : null,
+    `${Math.round(evidence.similarity * 100)}% match`,
+    evidence.url,
+  ].filter((p): p is string => p !== null);
+  return parts.join(" · ");
+}
+
 export function EvidenceCard({
   evidence,
   compact = false,
@@ -31,18 +46,34 @@ export function EvidenceCard({
   evidence: EvidenceDTO;
   compact?: boolean;
 }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyCitation(event: React.MouseEvent<HTMLButtonElement>): Promise<void> {
+    // the card itself is a link — keep the click on the button local
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(citationText(evidence));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* clipboard unavailable (permissions / non-secure ctx) — silently skip */
+    }
+  }
+
   return (
     <a
       href={evidence.url}
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
-        "group block rounded-lg border border-zinc-800 bg-zinc-900/40 p-3.5 transition-colors hover:border-zinc-600 hover:bg-zinc-900/70",
+        "group block rounded-lg border border-zinc-800 bg-zinc-900/60 p-3.5 transition-all duration-200",
+        "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/80 hover:shadow-lg hover:shadow-black/25",
         compact && "p-3"
       )}
       aria-label={`Evidence ${evidence.rank}: ${evidence.title}`}
     >
-      <div className="mb-2 flex items-start justify-between gap-2">
+      <div className="mb-1.5 flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
             #{evidence.rank}
@@ -59,7 +90,25 @@ export function EvidenceCard({
             {Math.round(evidence.similarity * 100)}% match
           </span>
         </div>
-        <ExternalLink className="size-3.5 shrink-0 text-zinc-600 transition-colors group-hover:text-emerald-400" aria-hidden />
+        <span className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={(e) => void copyCitation(e)}
+            title="Copy citation"
+            aria-label={`Copy citation for evidence ${evidence.rank}`}
+            className="rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-emerald-400 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50 group-hover:opacity-100"
+          >
+            {copied ? (
+              <Check className="size-3.5 text-emerald-400" aria-hidden />
+            ) : (
+              <Copy className="size-3.5" aria-hidden />
+            )}
+          </button>
+          <ExternalLink
+            className="size-3.5 text-zinc-600 transition-colors group-hover:text-emerald-400"
+            aria-hidden
+          />
+        </span>
       </div>
       <p className={cn("text-[13px] leading-relaxed text-zinc-200", compact && "line-clamp-2 text-xs")}>
         <Quote className="mr-1 inline size-3 text-zinc-600" aria-hidden />
