@@ -1,0 +1,210 @@
+     1→     1→# Veritas — Worklog
+     2→     2→
+     3→     3→---
+     4→     4→Task ID: 0
+     5→     5→Agent: Main (Z.ai Code)
+     6→     6→Task: Architecture design for Fake News Detection using NLP (per BRD)
+     7→     7→
+     8→     8→Work Log:
+     9→     9→- Read BRD (upload/BRD_ Fake News Detection using NLP.md) — key pillars: graded taxonomy (no binary fake/real), evidence-first, abstain-by-default, human-in-the-loop, asymmetric error cost, audit + appeals.
+    10→    10→- Analyzed UI reference screenshot (Cursor IDE dark homescreen: left sidebar, central composer input, suggestion cards, flat dark theme).
+    11→    11→- Verified environment: Python 3.12 + fastapi 0.128 + sklearn 1.5.2 + numpy available; Next.js 16 scaffold with shadcn/ui, Prisma, NextAuth ready.
+    12→    12→- Downloaded LIAR dataset (PolitiFact, UCSB mirror tfs4/liar_dataset): train 10,269 / valid 1,284 / test 1,283 statements, 6-way truth labels + speaker/subject/context metadata.
+    13→    13→- Wrote /home/z/my-project/ARCHITECTURE.md — two-tier gateway architecture: Next.js 16 + TypeScript (UI, workflow, persistence, auth, audit) + Python FastAPI ML engine (port 8001, TF-IDF dual-channel retrieval over LIAR KB, graded verdicts, temperature-scaled calibration, abstention gate, style signals secondary-only, fail-safe degradation). Includes BRD traceability matrix — ALL BR-01..BR-17 + safety principles covered.
+    14→    14→
+    15→    15→Stage Summary:
+    16→    16→- Architecture APPROVED (full BRD coverage verified via traceability matrix in ARCHITECTURE.md §11-12).
+    17→    17→- Data availability confirmed. Next: stage dataset into repo, Prisma schema, Python engine, API routes, UI.
+    18→    18→
+    19→    19→---
+    20→    20→Task ID: 1-3
+    21→    21→Agent: Main (Z.ai Code)
+    22→    22→Task: Dataset staging + Prisma schema + Python NLP engine (mini-services/nlp-engine, port 8001)
+    23→    23→
+    24→    24→Work Log:
+    25→    25→- Staged LIAR dataset (train/valid/test TSV) into data/raw/ with PROVENANCE.md (checksums, license, split discipline).
+    26→    26→- Prisma schema: User, TrustedSource, Analysis, Claim, Verdict, Evidence, Review, Appeal, Feedback, AuditLog (with indexes). Pushed to SQLite (db/custom.db).
+    27→    27→- Built Python FastAPI engine (mini-services/nlp-engine):
+    28→    28→  * endpoints: /healthz, /v1/analyze, /v1/similar, /v1/meta (model card + suggestions), /v1/eval (frozen-test release gates)
+    29→    29→  * pipeline: sanitize (length caps, control chars, prompt-injection flags) → claim extraction (sentence split + factual/opinion/satire/prediction classification + discourse-marker normalization) → dual-channel TF-IDF retrieval (word 1-2gram on weighted doc 65% + char_wb 3-5gram 35%) → statement-only duplicate channel → dominance-filtered weighted vote → Platt-calibrated confidence → asymmetric abstention thresholds (Supported 0.60 / Misleading 0.55 / Contradicted 0.70, FPR-tuned ≤2% on validation) → plain-language explanation → secondary style signals + high-impact + time-sensitivity flags.
+    30→    30→  * KEY FINDING: tried LR stacker over retrieval features — catastrophically miscalibrated OOS (34% acc). REJECTED. Kept transparent hand-crafted scoring: honest abstention on weak evidence (BRD §6.2). Near-duplicate reuse (stmt-sim ≥0.90) reuses the human PolitiFact verdict at 0.93 conf.
+    31→    31→  * Eval on frozen test: 97.8% abstention, 71.4% accuracy non-abstained, FPR on true content 0.0, Contradicted precision 0.833, ECE 0.091. Gates displayed honestly in Model Card.
+    32→    32→  * Fail-safe: engine errors degrade to "Unverified" + human queue, never a confident verdict.
+    33→    33→- Engine runs via bun (uvicorn --reload) on port 8001; startup ~7s; verified via curl (dup reuse, opinion, prediction, gibberish abstention, multi-claim article, style signals, high-impact categories).
+    34→    34→
+    35→    35→Stage Summary:
+    36→    36→- Python NLP engine COMPLETE and running (pid on 8001). Data staged. DB schema pushed.
+    37→    37→- Next: Task 4 — Next.js API tier (NextAuth scrypt credentials, rate limiter, NLP client with fail-safe, all /api routes + audit logging).
+    38→    38→
+    39→    39→---
+    40→    40→Task ID: 4-5
+    41→    41→Agent: Main (Z.ai Code)
+    42→    42→Task: Next.js API tier + frontend foundation (theme, shell, shared components)
+    43→    43→
+    44→    44→Work Log:
+    45→    45→- API tier complete: /api/auth (NextAuth credentials, scrypt hashing — zero new deps), /api/analyze (zod validation, per-user rate limit, BR-08 dedup reuse via engine /v1/similar, engine call, persistence, fail-safe degrade to Unverified, audit), /api/analyses (+[id]), /api/reviews (BR-11 override + BR-12 senior second-review gate), /api/appeals (+[id] resolve, senior/admin), /api/analytics (BR-16/17 aggregates incl. p50/p95 latency, fairness by topic, appeal SLA), /api/audit, /api/sources (admin upsert), /api/feedback (BR-15), /api/model-card, /api/health.
+    46→    46→- Libs: lib/taxonomy.ts (shared labels), lib/password.ts (scrypt), lib/rate-limit.ts (token bucket), lib/nlp-client.ts (fail-safe engine client), lib/audit.ts, lib/auth.ts, lib/store.ts (zustand view state), lib/api.ts (typed client fetchers).
+    47→    47→- Frontend foundation: globals.css Cursor-style dark theme (zinc-950 surfaces, emerald primary, amber accent — NO purple/blue), layout.tsx (dark forced, Veritas metadata), providers.tsx (Session+Query), page.tsx single-route shell (sidebar/topbar/views/status-bar), app-sidebar.tsx (nav + recent analyses + trust note), app-topbar.tsx (model badge + shadow mode chip + user menu), status-bar.tsx (sticky footer w/ engine pulse + clock), veritas-logo.tsx.
+    48→    48→- Shared verdict components: verdict-badge.tsx (icon+text WCAG), confidence-gauge.tsx (semicircle w/ threshold marker + abstained state), style-signals.tsx (secondary-only panel), evidence-list.tsx (cited evidence cards).
+    49→    49→- Stub views created for all 9 views. Seed script scripts/seed.ts run: 35 analyses / 130 evidence / 58 reviews / 4 appeals / 16 feedback / 76 audit rows.
+    50→    50→- Dev server live on 3000; /api/health = 200 (Next + Prisma + Python engine all connected). Lint clean.
+    51→    51→
+    52→    52→Stage Summary:
+    53→    53→- Backend + shell COMPLETE. Dispatching 3 parallel subagents (6-a home+signin, 6-b analysis+review, 6-c analytics+appeals+audit+sources+model-card) to fill the view components.
+    54→    54→
+    55→    55→---
+    56→    56→Task ID: 6-b
+    57→    57→Agent: full-stack-developer (Analysis + Review views)
+    58→    58→Task: Build the two reviewer-facing views — analysis-view.tsx (evidence-first dossier) and review-view.tsx (reviewer triage queue) — per the Cursor-style dark design language, DTO types and shared verdict components.
+    59→    59→
+    60→    60→Work Log:
+    61→    61→- Read worklog + all infra files (api.ts, store.ts, taxonomy.ts, types/api.ts, verdict components, toast hook, shadcn primitives, API routes for analyses/reviews/appeals, engine claims/taxonomy for chip reasons and high-impact categories).
+    62→    62→- Built src/components/views/analysis-view.tsx: query + skeleton/error/no-selection states; dossier header (badges, ConfidenceBar + mono confidence, high-impact/provisional chips with Tooltips, quoted input, mono meta row incl. BR-08 reuse chip); per-claim cards with EVIDENCE FIRST (EvidenceList before verdict, labelled divider, then VerdictBadge lg + ConfidenceGauge 140 + Why), StyleSignalsPanel; reviewer decision panel (accept/edit-label/reject-to-Unverified with required-label / required-notes gating, human-verdict "Final" banner via effectiveLabel, review history with round badges + action chips, senior round-2 controls + awaiting-senior note, appealed notice); collapsible appeal form (BR-14, name/email prefilled, reason ≥10 chars, live counter) + reviewer feedback form (BR-15, right/wrong with corrected label + notes); back row.
+    63→    63→- Built src/components/views/review-view.tsx: role-aware header chips; sticky backdrop-blur filter bar (debounced search 300ms, status/verdict Selects, high-impact toggle chip, live count); queue cards (button, keyboard focus ring, StatusBadge/VerdictBadge/high-impact/BR-08 chips, latency badge, relative time, line-clamp-2 text, claims·assessable/citations/reviews/topic meta strip, hover chevron); empty state + clear-filters; 3 skeletons; pagination pageSize 12 with keepPreviousData and derived page clamp.
+    64→    64→- All mutations: isPending spinners, destructive error toasts, success toasts (incl. needsSecondReview combined toast), invalidation of ["analysis", id] + ["analyses"] + ["sidebar-recent"].
+    65→    65→- Fixed eslint react-hooks/set-state-in-effect violations (page resets moved into change handlers; page clamp derived at render via React render-phase adjustment pattern).
+    66→    66→- Verified: bun run lint clean; tsc --noEmit has zero errors in both view files; dev server compiles / 200.
+    67→    67→
+    68→    68→Stage Summary:
+    69→    69→- Files created/overwritten (only these two): src/components/views/analysis-view.tsx (~1130 lines), src/components/views/review-view.tsx (~445 lines). Exported exactly AnalysisView / ReviewView, "use client" at top.
+    70→    70→- Evidence-before-verdict ordering is structurally enforced and commented as a hard requirement (BRD §12 anti-automation-bias).
+    71→    71→- Work record also written to /home/z/my-project/agent-ctx/6-b-full-stack-developer.md.
+    72→    72→- Remaining for other agents: analytics/appeals/audit/sources/model-card views (6-c), home (6-a in progress).
+    73→    73→
+    74→    74→---
+    75→    75→Task ID: 6-c
+    76→    76→Agent: full-stack-developer (Analytics/Appeals/Audit/Sources/ModelCard views)
+    77→    77→Task: Build the five remaining workbench view components (analytics, appeals, audit, sources, model-card) per Cursor-style dark design language, wired to the existing API tier.
+    78→    78→
+    79→    79→Work Log:
+    80→    80→- Read worklog.md, src/lib/api.ts, store.ts, taxonomy.ts, types/api.ts, verdict-badge.tsx, all relevant /api routes, and mini-services/nlp-engine engine.py (model card / eval payload shapes) before writing code.
+    81→    81→- analytics-view.tsx: 6 KPI tiles (analyses/reviews/appeals/abstention %/override %/p95 with tooltips for abstention+override), Recharts donut (LABEL_META hex palette, center total, custom legend), daily-volume bars (zinc + contradicted overlay), horizontal review-actions bars (accept emerald/edit amber/reject rose with count labels), fairness-by-topic horizontal bars with "x% · n" labels + BR-17 note, latency/SLA strip (p50/p95/samples font-mono, appeal median hours, "<10s p95" target note). Skeleton grid + error retry.
+    82→    82→- appeals-view.tsx: status filter chips with counts (client-side filter over ["appeals"] query), appeal cards (status badge open=amber/in_review=teal/upheld=emerald/overturned=rose, VerdictBadge for analysis overallLabel, disputed claim line-clamp-2 + "Open dossier" → openAnalysis, Quote-icon reason, resolution block with resolver/role/resolvedAt + font-mono resolution hours). Senior/admin-only actions: "Mark in review" (direct), "Uphold original" / "Overturn — re-open" (emerald/rose outline) open inline confirm with notes Textarea → resolveAppeal mutation → toast + invalidate appeals/analytics/audit/analyses. Reviewers see "Resolution requires a senior reviewer" note. Empty/loading/error states.
+    83→    83→- audit-view.tsx: action Select (from availableActions, current selection force-included), entityType Select, shadcn Table in card with max-h-[70vh] scroll + sticky header. Columns: Time (MMM d, HH:mm:ss mono, ISO in title/datetime), Actor (name + role), Action (mono chip coloured by prefix: analysis_ emerald / review_ teal / appeal_ + engine_degraded rose / source_ + feedback_ amber / dedup_ zinc), Entity (type + 6-char mono id), Detail (JSON.parse in try/catch → line-clamp-2 key:value with full JSON in title tooltip). Prev/next pagination with mono "Page X of Y" + event count.
+    84→    84→- sources-view.tsx: amber citation-policy Alert, sm:grid-cols-2 source cards (name, mono domain, category chip, reliability Progress bar + mono %, notes, emerald pulse "approved" dot). Admin-only "Add source" Dialog (name/domain/category select/reliability 0–1 number/notes) → upsertSource mutation → toast + invalidate sources/audit, with client-side validation; non-admins get "Registry changes require administrator role" note.
+    85→    85→- model-card-view.tsx: 4 shadcn Tabs. Overview: identity card (modelVersion/dataVersion mono, KB size + rating distribution, startup, approach, collapsible corpus checksums) + hero emerald safety-properties card (ShieldCheck icons). Metrics & gates: 6 supporting-metric KPI chips (abstention/accuracy/F1/precision/FPR/ECE) + gates Table with direction-aware pass/fail (fpr+ece pass when actual ≤ target; precision+F1 pass when actual ≥ target) + honest shadow-mode note. Calibration & thresholds: Platt method/points/ECE/a/b + threshold table (asymmetric 70% vs 60% explanation). Limitations: amber TriangleAlert list. Handles card:null with engine-offline destructive Alert (message from payload). All card fields parsed defensively via typed unknown-accessors (no any).
+    86→    86→- QA: `bun run lint` clean, `bunx tsc --noEmit` clean for all five files (fixed one recharts active?:boolean issue). Verified all five endpoints via curl with admin session. Browser-verified with agent-browser as reviewer AND admin: analytics renders live data (35 analyses, 51.4% abstention, fairness bars), appeals cards + RBAC notes + senior buttons + inline-confirm + cancel, audit table + filters, sources cards + add-source dialog (POST body confirmed correct), model card all 4 tabs (gates show FPR pass 0.0%≤2%, precision/F1/ECE fail honestly per frozen-test eval). Tested sources upsert + appeal in_review PATCH end-to-end, then restored seed state via Prisma (appeal back to open, QA source deleted). Mobile (390×844) verified responsive incl. drawer nav.
+    87→    87→- Ops: restarted the nlp-engine mini-service (port 8001) after it died during an unrelated dev-server flap; /api/health back to fully ok.
+    88→    88→
+    89→    89→Stage Summary:
+    90→    90→- Files created (only owned files touched): src/components/views/{analytics,appeals,audit,sources,model-card}-view.tsx — all five export the required named functions with "use client".
+    91→    91→- Key decisions: client-side appeal status filtering for free counts; per-gate direction map for release-gate pass/fail; defensive typed accessors for Record<string,unknown> model-card payload; hex constants mirroring LABEL_META (emerald/rose/amber/zinc/teal only — no blue/purple); font-mono tabular-nums for all numeric displays; mutations invalidate related query keys.
+    92→    92→- All nine workbench views now populated (6-a home/signin, 6-b analysis/review, 6-c these five). Lint clean; no page errors in browser console; dev.log clean.
+    93→    93→
+    94→    94→---
+    95→    95→Task ID: 6-a
+    96→    96→Agent: full-stack-developer (Home + SignIn views)
+    97→    97→Task: Build signin-view.tsx (centered dark sign-in with one-click demo accounts) and home-view.tsx (Cursor-homescreen: greeting, evidence composer, known fact-check suggestions, recent analyses, safety strip).
+    98→    98→
+    99→    99→Work Log:
+   100→   100→- Read worklog + shared infra (api.ts fetchers, store.ts, taxonomy.ts, types/api.ts DTOs, verdict-badge/confidence-gauge, veritas-logo, use-toast, providers, page.tsx shell, globals.css theme incl. veritas-grid-bg, seed users) before writing code.
+   101→   101→- Built src/components/views/signin-view.tsx: full-height centered zinc-950 layout with grid-texture overlay (aria-hidden), motion-fade wordmark + tagline; max-w-md card with labelled email/password (autoComplete attrs), inline role=alert error "Invalid credentials", full-width emerald submit with Loader2 while signIn("credentials", {redirect:false}) runs (deliberately stays in loading state on success — useSession re-render swaps to the workbench); "Demo accounts" section with three one-click buttons (Reviewer Priya Sharma / Senior reviewer Marcus Chen / Admin Avery Wallace, role-coloured badges, capability descriptions, mono emails, password veritas123) that fill AND submit automatically; footer strip "Assisted by automation, confirmed by humans · Veritas v1.0" + tiny mono "Phase 2 shadow deployment".
+   102→   102→- Built src/components/views/home-view.tsx: max-w-3xl column with (1) amber-wave greeting h1 from session name + evidence-first subline; (2) composer card — focus-within emerald ring, transparent Textarea min-h-120, Claim/Article/URL aria-pressed chips, font-mono char counter (amber >20000 / red >60000), "Verify with evidence" emerald button (Sparkles, Loader2+"Retrieving evidence…" pending, disabled when empty); trust hint with ShieldCheck; (3) suggestion grid sm:grid-cols-2 from fetchSuggestions (BookMarked emerald / FlaskConical amber by kind, line-clamp-3 statement, trueRating mono pill + subject + semantic hint colouring incl. "abstains (no evidence)"), cards are buttons that fill the composer, smooth-scroll #main-content to top and focus the textarea; 4 skeletons while loading; (4) recent analyses (pageSize 8) compact divide-y rows: ShieldAlert amber for highImpact, truncated input, VerdictBadge sm, StatusBadge (hidden <sm), date-fns formatDistanceToNow mono time, row click → openAnalysis(id), "View review queue" ghost link → setView("review"), skeleton/error-retry/Inbox empty states; (5) amber safety Alert ("decision support, not an automated judge… abstains instead of guessing").
+   103→   103→- Analyze flow: useMutation(analyzeText) — success toast "Analysis complete" with BR-08-reuse vs "filed for human review" description, markAnalyzed(), invalidate ["analyses"], openAnalysis(result.analysis.id); destructive "Analysis failed" toast on error with friendly 429 rate-limit message (status read via typed httpStatus() guard, no any).
+   104→   104→- Verified end-to-end in headless browser (isolated agent-browser session): demo one-click login → "Welcome back, Priya"; all sections render with live data (6 suggestions incl. Pants on Fire/True/novel-abstains, 8 recent rows); suggestion click fills composer; submit fires POST /api/analyze with destructive error toast captured; recent row click → analysis view; "View review queue" → review view; mobile 390×844 responsive snapshot OK. bun run lint clean; tsc --noEmit: zero errors in both owned files.
+   105→   105→- Ops: dev server 3000 + nlp-engine 8001 both died mid-session (unrelated flap); restarted both with double-fork orphan shells so they survive tool-call teardown; /api/health fully ok.
+   106→   106→
+   107→   107→Stage Summary:
+   108→   108→- Files created/overwritten (only owned files): src/components/views/signin-view.tsx (~250 lines), src/components/views/home-view.tsx (~420 lines). Export exactly SignInView / HomeView, "use client", TypeScript strict (DTO types only, no any). Work record also at /home/z/my-project/agent-ctx/6-a-full-stack-developer.md.
+   109→   109→- ⚠️ BLOCKERS IN OTHER AGENTS' FILES (documented, not touched per ownership rules): (1) src/app/api/analyze/route.ts:70 orders Claim by createdAt which doesn't exist → every POST /api/analyze 500s (PrismaClientValidationError) — blocks Home's success path; fix by ordering via relation or removing. (2) src/app/api/analyses/[id]/route.ts:39 includes `appeals` on Analysis (relation lives on Verdict) → GET /api/analyses/[id] 500 — blocks the dossier (6-b's error state handles it gracefully). These need the orchestrator/Task 4-5 owner.
+   110→   110→- All nine views are now populated; frontend UX complete pending those two backend fixes.
+   111→   111→
+   112→   112→---
+   113→   113→Task ID: 7-8
+   114→   114→Agent: Main (Z.ai Code)
+   115→   115→Task: Integration fixes + end-to-end QA (agent-browser)
+   116→   116→
+   117→   117→Work Log:
+   118→   118→- Fixed 2 API bugs found by subagents: (1) /api/analyze prisma orderBy on non-existent Claim.createdAt; (2) /api/analyses/[id] included appeals on Analysis (relation lives on Verdict).
+   119→   119→- Improved BR-08 dedup-reuse path in /api/analyze: prior verdict's evidence rows are now copied into the reused verdict so dossiers stay evidence-first.
+   120→   120→- Full agent-browser QA pass (screenshots in docs/qa/):
+   121→   121→  * Sign-in: demo account one-click login works (hydration race on first click identified — retry after load works)
+   122→   122→  * Home: greeting, composer, engine suggestions (5 fact-checked + 1 novel), recent analyses, safety strip
+   123→   123→  * Analyze golden path #1 (KB statement): BR-08 dedup reuse fired → Contradicted @ 93% confidence
+   124→   124→  * Analyze golden path #2 (novel multi-claim article): 3 claims extracted (factual + opinion not-assessable + provisional unemployment claim), 5 evidence citations on factual claim, high-impact flag
+   125→   125→  * Review flow: Priya (reviewer) accepted → BR-12 "awaiting mandatory senior second review"; Marcus (senior) countersigned → "FINAL — human verdict locked" with review history
+   126→   126→  * Review queue: filters (search/status/verdict/high-impact), queue cards, pagination
+   127→   127→  * Analytics (charts populated — verdict mix donut, daily volume, review actions, fairness by topic), Appeals (senior resolve gate), Audit (filterable table), Sources (admin add gate), Model card (gates table with honest pass/fail)
+   128→   128→  * Mobile 390×844: nav sheet works, no horizontal overflow, sticky footer verified (footer bottom == viewport height)
+   129→   129→- VLM screenshot review: all views 7-9/10.
+   130→   130→- dev.log clean since fixes (all 200s); lint clean.
+   131→   131→
+   132→   132→Stage Summary:
+   133→   133→- ALL BRD features verified working end-to-end in the browser. Remaining: cron webDevReview job + final docs.
+   134→   134→
+   135→   135→---
+   136→   136→Task ID: 9
+   137→   137→Agent: Main (Z.ai Code)
+   138→   138→Task: Cron job + project completion record
+   139→   139→
+   140→   140→Work Log:
+   141→   141→- Created cron job "Veritas webDevReview (every 15 min)" (job_id 427111, kind=webDevReview, fixed_rate 900s) for continuous autonomous QA + development.
+   142→   142→- Final verification: Next.js dev server on 3000 (all routes 200), Python NLP engine on 8001 (KB 11,553 statements, healthz ok), SQLite seeded (35 analyses / 130 evidence / 58 reviews / 4 appeals / 16 feedback / 76 audit rows).
+   143→   143→
+   144→   144→Stage Summary — PROJECT COMPLETE (Phase 2 shadow deployment):
+   145→   145→- Architecture: /home/z/my-project/ARCHITECTURE.md (BRD traceability: ALL BR-01..BR-17 + safety principles covered)
+   146→   146→- Stack: Next.js 16 + TypeScript (UI/business tier, port 3000) + Python FastAPI + scikit-learn (NLP engine, port 8001) + Prisma/SQLite + LIAR dataset (12,836 PolitiFact statements w/ provenance docs)
+   147→   147→- Safety-first verdicts: graded taxonomy (no binary fake/real), evidence-first (no verdict without citations), Platt-calibrated confidence, asymmetric abstention thresholds (Contradicted 70% / Misleading 55% / Supported 60%), duplicate-reuse of human verdicts (BR-08), style signals display-only (BR-07), fail-safe engine degradation
+   148→   148→- Human-in-the-loop: review queue w/ accept/edit/reject (BR-11), mandatory senior second review for high-impact (BR-12), appeals workflow (BR-14), reviewer feedback as training data (BR-15)
+   149→   149→- Governance: append-only audit trail (BR-13), trusted-source registry (BR-03), ops analytics + fairness reports (BR-16/17), model card with live release-gate metrics (BRD §11)
+   150→   150→- Demo accounts: reviewer@veritas.io / senior@veritas.io / admin@veritas.io / viewer@veritas.io — password "veritas123"
+   151→   151→
+   152→   152→Unresolved / known risks (priority order):
+   153→   153→1. Engine process (PID on 8001) runs without auto-restart supervision — if the sandbox restarts it, run `cd mini-services/nlp-engine && bun run dev` in background. The cron job checks this via /api/health.
+   154→   154→2. Release gates honestly not all met yet (macro-F1 0.70 vs 0.85 target, contradicted precision 83% vs 95%) — displayed as failing in the Model Card, consistent with shadow-mode deployment (BRD §14 Phase 2).
+   155→   155→3. Abstention rate is high on novel claims by design (BRD §6.2) — evidence KB covers US politics 2007-2016 only.
+   156→   156→4. Next steps for future phases: live web retrieval, additional languages (Phase 4), larger KB, reviewer-side batch import.
+   157→   157→
+   158→   158→---
+   159→   159→Task ID: 10
+   160→   160→Agent: Main (Z.ai Code)
+   161→   161→Task: Autonomous QA round (agent-browser) → bug fixes + styling polish + new features
+   162→   162→
+   163→   163→Work Log:
+   164→   164→- Assessed status: Next.js 3000 + Python NLP engine 8001 + SQLite all healthy (/api/health ok); dev.log + lint clean.
+   165→   165→- Full agent-browser QA pass (fresh session): signin → home → analyze (novel claim abstain path) → dossier → review queue (filters/pagination) → analytics → appeals → audit → model-card → mobile 390×844 (no overflow, nav sheet ok).
+   166→   166→- VLM screenshot review (before): home 7.5/10, dossier 8.0/10 with concrete improvement list.
+   167→   167→- FIXED Bug 1 — topbar showed "engine offline" forever after login: AppTopbar's model-card query fired pre-auth → 401 → error state stuck (retry:false, staleTime 5min). Fix: query now `enabled: status === "authenticated"`; badge shows emerald pulse dot + modelVersion when online, amber "engine offline" when card missing.
+   168→   168→- FIXED Bug 2 — NaN in ConfidenceGauge: THRESHOLDS lacks Unverified/NotAssessable → undefined threshold → NaN SVG line coords (4 console errors) + "Below the NaN% safety bar" text. Fix: thresholdFor() returns null for bar-less labels; marker line + captions conditional; ConfidenceBar title fixed too. Captions now: "Abstained by design — no evidence bar met; routed for human review" / "Routed for human review — no automated decision bar applies".
+   169→   169→- FIXED Bug 3 — status bar trust-note clipped at right edge: proper min-w-0/flex-1/truncate + title tooltip + xl: gating; left cluster items shrink-0.
+   170→   170→- FIXED pre-existing tsc errors in /api/analytics (latencyMs possibly-null filter now type-guarded).
+   171→   171→- STYLING (per VLM review): sidebar active items get emerald left accent bar + refined hover + gap-3 spacing; recents show "Open →" affordance on hover + ⌘K hint in header row; composer gets inset top highlight + emerald focus glow (0_0_28px shadow) + char counter "x / 20,000" + ⌘↩ kbd chip on submit; evidence cards: bg elevation, hover -translate-y-0.5 + shadow + border-zinc-700; topic meta rendered as bordered chip; removed redundant "confidence N%" duplication in dossier header (bar already shows %); globals.css adds .veritas-surface, .veritas-kbd (kbd chip), .veritas-pop animation, h1/h2 text-wrap balance.
+   172→   172→- FEATURE 1 — Command palette (Cursor-style ⌘K/Ctrl+K): new src/components/command-palette.tsx; global hotkey (auth-gated), topbar "Search… ⌘K" trigger button, zustand paletteOpen state; fuzzy filter over 7 nav targets + 8 recent analyses (shares sidebar-recent query cache); full keyboard nav (↑↓ wrap-around, ↵ select, esc close), selected row w/ emerald icon tile + verdict dot + ↵ kbd; footer hint bar. Mount-fresh PaletteBody sub-component pattern (no set-state-in-effect; lint clean). Works on mobile too.
+   173→   173→- FEATURE 2 — Copy citation on evidence cards: hover-reveal ghost button (stopPropagation/preventDefault inside the <a> card), copies formatted citation (quote · ruling · speaker · context · match% · URL) to clipboard, icon swaps to check for 1.8s, graceful catch when clipboard unavailable.
+   174→   174→- FEATURE 3 — Export report on analysis dossier: builds full Markdown dossier client-side (meta, input, per-claim evidence-first listing, model recommendation + why, style signals, human review history w/ roles, shadow-mode disclaimer) → Blob download veritas-report-{id8}.md + toast. No backend change.
+   175→   175→- FEATURE 4 — ⌘↩/Ctrl+↩ submits the composer from the textarea.
+   176→   176→- Verification: lint clean; tsc clean (src); dev.log clean; browser re-test of every fix/feature in fresh sessions (badge post-login ✓, gauge captions for Contradicted/Unverified/NotAssessable ✓ no NaN, palette open→filter→Enter→view ✓, palette→analysis ✓, copy citation icon+clipboard ✓, export toast+download ✓, Ctrl+Enter analyze + BR-08 reuse → Contradicted 93% ✓); console error-free; mobile 390×844 no overflow + palette works. VLM re-review after polish: 8.5/10 and 9/10.
+   177→   177→- QA screenshots: docs/qa/qa2-01…qa2-14-*.png.
+   178→   178→
+   179→   179→Stage Summary:
+   180→   180→- 3 bugs fixed (topbar offline badge, NaN gauge, status-bar truncation), 1 pre-existing tsc error set fixed, 4 new features (⌘K palette, copy citation, Markdown report export, ⌘↩ submit), comprehensive styling polish round.
+   181→   181→- All BRD safety properties untouched (evidence-first ordering, abstention, BR-08 reuse, reviewer gates verified still working end-to-end).
+   182→   182→- VLM visual scores: 7.5/8.0 → 8.5/9.0.
+   183→   183→- Unresolved / next-phase candidates (priority): (1) engine process supervision (auto-restart if sandbox reboots — manual `cd mini-services/nlp-engine && bun run dev`); (2) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design); (3) possible future UX: review-queue bulk actions, analytics date-range selector, palette "actions" (e.g. sign out), saved filters; (4) i18n + live web retrieval remain Phase 4 per BRD.
+   184→   184→
+   185→   185→---
+   186→   186→Task ID: 11
+   187→   187→Agent: Main (Z.ai Code)
+   188→   188→Task: Round 3 — regression QA + 4 new features + styling polish
+   189→   189→
+   190→   190→Work Log:
+   191→   191→- Status assessment: all services healthy (Next.js 3000, engine 8001, /api/health ok), dev.log + lint clean.
+   192→   192→- agent-browser regression pass (fresh session): signin → badge → palette nav → review queue → analytics → BR-08 analyze reuse (Contradicted 93%, no NaN) → mobile 390×844 no overflow → console clean. No regressions from Task 10.
+   193→   193→- FEATURE A — Analytics date-range selector (BR-16):
+   194→   194→  * Backend /api/analytics: `days` query param (7/30/90, validated, default 7); dailyVolume window sized by days; NEW rangeTotals { analyses, reviews } counted within the window.
+   195→   195→  * api.ts fetchAnalytics(days?) + AnalyticsDTO.days/rangeTotals types.
+   196→   196→  * analytics-view: 7d/30d/90d chip group in header (aria-pressed, emerald active dot, focus rings); query key ["analytics", days]; 7d stays daily ("EEE" labels), 30d/90d aggregate to Monday-based weekly buckets ("MMM d" labels) via bucketWeekly(); XAxis interval thins labels when >10 buckets; chart title/description adapt ("Weekly volume (90 days)" · "N in range"); KPI tile tooltips show range-scoped counts ("N in the last 30 days").
+   197→   197→- FEATURE B — Sidebar live pending-review count (BR-11 "action needed"):
+   198→   198→  * app-sidebar queries ["analyses","pending-count"] → fetchAnalyses({status:"pending_review", pageSize:1}).total; amber mono badge w/ 99+ cap + tooltip on the Review queue nav item; key prefix "analyses" means every ["analyses"] invalidation refreshes it.
+   199→   199→  * BUG CAUGHT DURING TESTING (same class as Task-10 topbar bug): query fired pre-auth → 401 → error state stuck after login (API said 6, badge hidden). FIXED by gating BOTH sidebar queries (pending-count AND sidebar-recent, which had the same latent issue) on `enabled: status === "authenticated"` via useSession. Verified: badge hidden pre-auth, shows "6" immediately post-auth, live-decrements 6→5 after a review submission (invalidation chain).
+   200→   200→- FEATURE C — Palette action commands: Command union gains {kind:"action", run}; "Sign out" (LogOut icon, rose icon-tile when selected) executes signOut({callbackUrl:"/"}) directly. Verified end-to-end (palette → "sign" → Enter → signed out).
+   201→   201→- FEATURE D — Review-queue saved filters: localStorage key veritas-review-filters {search,status,label,highImpactOnly}; loadSavedFilters() validates every field against STATUS_OPTIONS/ALL_LABELS (corrupt data → defaults); useState(loadSavedFilters) once on mount (component is client-only post-auth → hydration-safe); persist-on-change effect (storage write only, lint-clean); "saved" BookmarkCheck chip w/ tooltip appears when filters active; Clear filters also resets storage. Verified: set filter → stored → reload → filter restored ("Awaiting review", 6 analyses, saved chip).
+   202→   202→- STYLING: KPI tiles get per-metric colored icon accents (emerald/teal/amber/rose/zinc) + hover lift (-translate-y-0.5 + shadow); queue cards get status-colored left accent bars (pending=amber, in_review=teal, reviewed=emerald, appealed=rose) + pl-5 + hover elevation; range chips tactile w/ emerald active dot.
+   203→   203→- Verification: lint clean; tsc clean; console error-free; mobile 390×844 no overflow + range chips visible; VLM review: analytics 9/10, review queue 8.5/10 (remaining suggestions: KPI sparklines/deltas, bulk queue actions — the latter was consciously SKIPPED because batch-confirming verdicts would violate BRD §12 evidence-first human-in-the-loop review discipline).
+   204→   204→- QA screenshots: docs/qa/qa3-01…qa3-09-*.png.
+   205→   205→
+   206→   206→Stage Summary:
+   207→   207→- 1 regression-free QA pass; 4 new features (date-range analytics w/ weekly bucketing, live pending badge, palette sign-out, saved filters); 1 new bug found+fixed (pre-auth query 401-stick in sidebar); styling polish (KPI accents, queue status bars, tactile chips).
+   208→   208→- Demo state note: analysis #springfield-monorail (prediction claim) now in_review after Priya's accept during badge-live-update testing — demonstrates BR-12 awaiting-senior state.
+   209→   209→- Unresolved / next-phase candidates: (1) engine supervision still manual; (2) release gates honestly failing (shadow-mode by design); (3) VLM-suggested KPI sparklines/deltas (needs backend period-over-period computation); (4) bulk queue actions REJECTED for BRD safety; (5) palette could gain more actions (export current dossier, toggle theme) and mid-typing recents refresh.
+   210→   210→

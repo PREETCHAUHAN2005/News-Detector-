@@ -22,6 +22,9 @@ interface AppState {
   /** ⌘K command palette visibility (topbar button + keyboard shortcut) */
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
+  /** keyboard shortcuts cheatsheet visibility ("?" key + topbar button) */
+  shortcutsOpen: boolean;
+  setShortcutsOpen: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -33,4 +36,6 @@ export const useAppStore = create<AppState>((set) => ({
   markAnalyzed: () => set({ lastAnalyzedAt: Date.now() }),
   paletteOpen: false,
   setPaletteOpen: (open) => set({ paletteOpen: open }),
+  shortcutsOpen: false,
+  setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
 }));

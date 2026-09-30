@@ -117,10 +117,27 @@ export interface AuditLogDTO {
   actor?: { name: string; role: string } | null;
 }
 
+export interface TrendPoint {
+  current: number;
+  previous: number;
+  /** relative fraction for counts/latency, absolute percentage points for rates */
+  delta: number | null;
+}
+
 export interface AnalyticsDTO {
   /** Volume window for dailyVolume / rangeTotals (7/30/90, default 7). */
   days?: number;
   rangeTotals?: { analyses: number; reviews: number };
+  /** Period-over-period KPI trends for the selected window. */
+  trends?: {
+    analyses: TrendPoint;
+    reviews: TrendPoint;
+    abstention: TrendPoint;
+    override: TrendPoint;
+    latencyP95: TrendPoint;
+  };
+  /** Daily analysis totals within the window (oldest → newest). */
+  sparkline?: number[];
   totals: { analyses: number; reviews: number; appeals: number; reviewers: number };
   statusMix: Record<string, number>;
   verdictMix: Record<string, number>;

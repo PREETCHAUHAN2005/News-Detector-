@@ -9,10 +9,11 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenCheck,
   ChartColumn,
+  Download,
   FileSearch,
   History,
   LogOut,
@@ -23,9 +24,11 @@ import {
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { fetchAnalyses } from "@/lib/api";
+import { downloadReport } from "@/lib/report";
 import { LABEL_META, type VerdictLabel } from "@/lib/taxonomy";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import type { AnalysisDTO } from "@/types/api";
 
 const NAV_TARGETS: { id: ViewId; label: string; hint: string; icon: typeof FileSearch }[] = [
@@ -90,6 +93,10 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
 
   const setView = useAppStore((s) => s.setView);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const activeAnalysisId = useAppStore((s) => s.activeAnalysisId);
+  const view = useAppStore((s) => s.view);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   // shares the sidebar's cache — no extra request in the common case
   const { data: recent } = useQuery({
@@ -97,6 +104,12 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
     queryFn: () => fetchAnalyses({ pageSize: 8 }),
     staleTime: 15_000,
   });
+
+  // dossier export is offered when a dossier is open and cached
+  const cachedDossier = queryClient.getQueryData<{ analysis: AnalysisDTO }>([
+    "analysis",
+    activeAnalysisId,
+  ]);
 
   const commands = useMemo<Command[]>(() => {
     const views: Command[] = NAV_TARGETS.map((t) => ({
@@ -113,18 +126,42 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       hint: a.overallLabel ?? "Unverified",
       analysis: a,
     }));
-    const actions: Command[] = [
-      {
+    const actions: Command[] = [];
+    if (view === "analysis" && activeAnalysisId && cachedDossier?.analysis) {
+      const dossier = cachedDossier.analysis;
+      actions.push({
         kind: "action",
-        id: "signout",
-        label: "Sign out",
-        hint: "end this session",
-        icon: LogOut,
-        run: () => void signOut({ callbackUrl: "/" }),
-      },
-    ];
+        id: "export-dossier",
+        label: "Export current dossier",
+        hint: `download #${dossier.id.slice(0, 8)} as Markdown`,
+        icon: Download,
+        run: () => {
+          try {
+            downloadReport(dossier);
+            toast({
+              title: "Report exported",
+              description: `veritas-report-${dossier.id.slice(0, 8)}.md downloaded.`,
+            });
+          } catch {
+            toast({
+              variant: "destructive",
+              title: "Export failed",
+              description: "The report could not be generated in this browser.",
+            });
+          }
+        },
+      });
+    }
+    actions.push({
+      kind: "action",
+      id: "signout",
+      label: "Sign out",
+      hint: "end this session",
+      icon: LogOut,
+      run: () => void signOut({ callbackUrl: "/" }),
+    });
     return [...views, ...analyses, ...actions].filter((c) => matches(c, query));
-  }, [recent, query]);
+  }, [recent, query, view, activeAnalysisId, cachedDossier, toast]);
 
   /* Cursor clamped at render time — never out of range. */
   const cursorSafe = commands.length ? Math.min(cursor, commands.length - 1) : 0;

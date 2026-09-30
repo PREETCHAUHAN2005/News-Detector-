@@ -28,6 +28,8 @@ import {
   HelpCircle,
   RotateCcw,
   ScrollText,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -93,7 +95,102 @@ function bucketWeekly(
     .map(([date, v]) => ({ date, ...v }));
 }
 
-/* ───────────────────────────── KPI tile ───────────────────────────── */
+/* ── KPI sparkline + delta chip ────────────────────────────────────── */
+
+/** Inline SVG trend line for KPI tiles (no chart lib overhead). */
+function Sparkline({ values, className }: { values: number[]; className?: string }) {
+  if (values.length < 2) return null;
+  const w = 72;
+  const h = 24;
+  const pad = 2;
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = max - min || 1;
+  const stepX = (w - pad * 2) / (values.length - 1);
+  const points = values.map((v, i) => {
+    const x = pad + i * stepX;
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return [x, y] as const;
+  });
+  const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const area = `${pad},${h - pad} ${line} ${w - pad},${h - pad}`;
+  const [lastX, lastY] = points[points.length - 1];
+  const rising = values[values.length - 1] >= values[0];
+  const stroke = rising ? "#34d399" : "#fb7185";
+  return (
+    <svg
+      viewBox={`0 0 ${w} ${h}`}
+      width={w}
+      height={h}
+      className={className}
+      role="img"
+      aria-label={`Daily volume trend: ${min} to ${max} per day over the window`}
+    >
+      <polygon points={area} fill={stroke} opacity={0.08} />
+      {/* faint baseline so the micro-trend has a floor reference */}
+      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="#3f3f46" strokeWidth={0.5} />
+      <polyline
+        points={line}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.75}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx={lastX} cy={lastY} r={2.2} fill={stroke} />
+    </svg>
+  );
+}
+
+interface KpiDelta {
+  current: number;
+  previous: number;
+  /** relative fraction for counts/latency, absolute percentage points for rates */
+  delta: number | null;
+  /** how the delta value is formatted */
+  kind: "count" | "rate" | "ms";
+  /** which direction is desirable — "none" renders neutral zinc */
+  good: "up" | "down" | "none";
+}
+
+/** Period-over-period change chip under the KPI value. */
+function DeltaChip({ delta, days }: { delta: KpiDelta; days: number }) {
+  if (delta.delta === null) {
+    // previous window was empty — nothing comparable yet
+    return delta.previous === 0 && delta.current > 0 ? (
+      <p className="mt-1 font-mono text-[10px] text-zinc-600">new in this window</p>
+    ) : null;
+  }
+  const pct = delta.delta;
+  if (pct === 0) {
+    return (
+      <p className="mt-1 font-mono text-[10px] text-zinc-600">flat vs prev {days}d</p>
+    );
+  }
+  const up = pct > 0;
+  const good =
+    delta.good === "none" ? null : (up && delta.good === "up") || (!up && delta.good === "down");
+  const cls =
+    good === null
+      ? "text-zinc-300"
+      : good
+        ? "text-emerald-300"
+        : "text-rose-300";
+  const TrendIcon = up ? TrendingUp : TrendingDown;
+  const magnitude =
+    delta.kind === "rate"
+      ? `${up ? "+" : "−"}${Math.abs(pct * 100).toFixed(1)}pp`
+      : `${up ? "+" : "−"}${Math.abs(Math.round(pct * 100))}%`;
+  return (
+    <p className={cn("mt-1 flex items-center gap-1 font-mono text-[10px] tabular-nums", cls)}>
+      <TrendIcon className="size-3" aria-hidden />
+      {magnitude}
+      <span className="font-sans text-zinc-600">vs prev {days}d</span>
+    </p>
+  );
+}
+
+/* ── KPI tile ──────────────────────────────────────────────────────── */
 
 function KpiTile({
   icon: Icon,
@@ -101,33 +198,49 @@ function KpiTile({
   label,
   tip,
   accent = "text-zinc-500",
+  delta,
+  sparkline,
+  days,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: string;
   label: string;
   tip?: string;
   accent?: string;
+  delta?: KpiDelta;
+  sparkline?: number[];
+  days?: number;
 }) {
+  const tipWithPrev =
+    tip && delta ? `${tip} · previous ${days}d: ${delta.previous.toLocaleString()}` : tip;
   return (
     <Card className="group border-zinc-800 bg-zinc-900/40 transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-700 hover:shadow-lg hover:shadow-black/20">
       <CardContent className="p-4">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
           <Icon className={`size-3.5 shrink-0 ${accent}`} aria-hidden />
           <span className="truncate">{label}</span>
-          {tip ? (
+          {tipWithPrev ? (
             <UiTooltip>
               <TooltipTrigger asChild>
-                <HelpCircle className="ml-auto size-3 shrink-0 cursor-help text-zinc-600 hover:text-zinc-400" aria-label={tip} />
+                <HelpCircle className="ml-auto size-3 shrink-0 cursor-help text-zinc-600 hover:text-zinc-400" aria-label={tipWithPrev} />
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-52 text-xs">
-                {tip}
+                {tipWithPrev}
               </TooltipContent>
             </UiTooltip>
           ) : null}
         </div>
-        <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
-          {value}
-        </p>
+        <div className="mt-2 flex items-end justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+              {value}
+            </p>
+            {delta && days ? <DeltaChip delta={delta} days={days} /> : null}
+          </div>
+          {sparkline && sparkline.length > 1 ? (
+            <Sparkline values={sparkline} className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
+          ) : null}
+        </div>
       </CardContent>
     </Card>
   );
@@ -241,6 +354,10 @@ export function AnalyticsView() {
 
   const totalReviews = reviewData.reduce((s, r) => s + r.count, 0);
 
+  // period-over-period KPI trends (backend-computed, same window as the selector)
+  const trends = data.trends;
+  const sparkline = data.sparkline ?? [];
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
       {/* header + range selector */}
@@ -289,6 +406,9 @@ export function AnalyticsView() {
           value={data.totals.analyses.toLocaleString()}
           label="Analyses"
           accent="text-emerald-400/80"
+          days={days}
+          sparkline={sparkline}
+          delta={trends?.analyses ? { ...trends.analyses, kind: "count", good: "up" } : undefined}
           tip={
             typeof rangeAnalyses === "number"
               ? `${rangeAnalyses.toLocaleString()} in the last ${days} days`
@@ -300,6 +420,8 @@ export function AnalyticsView() {
           value={data.totals.reviews.toLocaleString()}
           label="Reviews"
           accent="text-teal-400/80"
+          days={days}
+          delta={trends?.reviews ? { ...trends.reviews, kind: "count", good: "up" } : undefined}
           tip={
             typeof rangeReviews === "number"
               ? `${rangeReviews.toLocaleString()} in the last ${days} days`
@@ -317,6 +439,8 @@ export function AnalyticsView() {
           value={fmtPercent(data.abstentionRate)}
           label="Abstention"
           accent="text-zinc-400"
+          days={days}
+          delta={trends?.abstention ? { ...trends.abstention, kind: "rate", good: "none" } : undefined}
           tip="Share of analyses the system responsibly abstained on"
         />
         <KpiTile
@@ -324,6 +448,8 @@ export function AnalyticsView() {
           value={fmtPercent(data.overrideRate)}
           label="Override rate"
           accent="text-rose-400/80"
+          days={days}
+          delta={trends?.override ? { ...trends.override, kind: "rate", good: "down" } : undefined}
           tip="Reviews where the human changed the model's recommendation"
         />
         <KpiTile
@@ -331,6 +457,8 @@ export function AnalyticsView() {
           value={`${data.latency.p95.toLocaleString()} ms`}
           label="Latency p95"
           accent="text-emerald-400/80"
+          days={days}
+          delta={trends?.latencyP95 ? { ...trends.latencyP95, kind: "ms", good: "down" } : undefined}
         />
       </section>
 
@@ -447,7 +575,7 @@ export function AnalyticsView() {
                       />
                     )}
                   />
-                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" radius={[3, 3, 0, 0]} maxBarSize={26} />
+                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" fillOpacity={0.55} radius={[3, 3, 0, 0]} maxBarSize={26} />
                   <Bar dataKey="contradicted" name="Contradicted" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[3, 3, 0, 0]} maxBarSize={26} />
                 </BarChart>
               </ResponsiveContainer>

@@ -67,8 +67,8 @@ export function EvidenceCard({
       target="_blank"
       rel="noopener noreferrer"
       className={cn(
-        "group block rounded-lg border border-zinc-800 bg-zinc-900/60 p-3.5 transition-all duration-200",
-        "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/80 hover:shadow-lg hover:shadow-black/25",
+        "group block rounded-lg border border-zinc-800 bg-zinc-900/70 p-3.5 transition-all duration-200",
+        "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/90 hover:shadow-lg hover:shadow-black/25",
         compact && "p-3"
       )}
       aria-label={`Evidence ${evidence.rank}: ${evidence.title}`}
@@ -86,7 +86,7 @@ export function EvidenceCard({
           >
             {RATING_LABEL[evidence.kbRating] ?? evidence.kbRating}
           </span>
-          <span className="font-mono text-[11px] text-zinc-500">
+          <span className="font-mono text-[11px] font-medium tabular-nums text-zinc-400">
             {Math.round(evidence.similarity * 100)}% match
           </span>
         </div>
@@ -109,6 +109,27 @@ export function EvidenceCard({
             aria-hidden
           />
         </span>
+      </div>
+      {/* similarity meter — visualizes retrieval strength at a glance */}
+      <div
+        className="mb-2 h-1 w-full overflow-hidden rounded-full bg-zinc-800/80"
+        role="meter"
+        aria-valuenow={Math.round(evidence.similarity * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`Retrieval similarity ${Math.round(evidence.similarity * 100)}%`}
+      >
+        <div
+          className={cn(
+            "h-full rounded-full transition-all duration-300",
+            evidence.similarity >= 0.8
+              ? "bg-emerald-500/80"
+              : evidence.similarity >= 0.6
+                ? "bg-amber-500/80"
+                : "bg-zinc-600"
+          )}
+          style={{ width: `${Math.max(4, Math.round(evidence.similarity * 100))}%` }}
+        />
       </div>
       <p className={cn("text-[13px] leading-relaxed text-zinc-200", compact && "line-clamp-2 text-xs")}>
         <Quote className="mr-1 inline size-3 text-zinc-600" aria-hidden />

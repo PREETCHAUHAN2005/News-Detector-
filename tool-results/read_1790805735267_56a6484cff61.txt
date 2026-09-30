@@ -1,0 +1,627 @@
+     1→"use client";
+     2→/**
+     3→ * Operations analytics (BR-16/17) — volume, verdict mix, abstention,
+     4→ * overrides, latency percentiles and fairness-by-topic surfacing.
+     5→ */
+     6→import { useState } from "react";
+     7→import { useQuery } from "@tanstack/react-query";
+     8→import {
+     9→  Bar,
+    10→  BarChart,
+    11→  CartesianGrid,
+    12→  Cell,
+    13→  LabelList,
+    14→  Pie,
+    15→  PieChart,
+    16→  ResponsiveContainer,
+    17→  Tooltip,
+    18→  XAxis,
+    19→  YAxis,
+    20→} from "recharts";
+    21→import { format } from "date-fns";
+    22→import {
+    23→  AlertTriangle,
+    24→  BookOpenCheck,
+    25→  Clock,
+    26→  FileSearch,
+    27→  Gauge,
+    28→  HelpCircle,
+    29→  RotateCcw,
+    30→  ScrollText,
+    31→} from "lucide-react";
+    32→
+    33→import { Button } from "@/components/ui/button";
+    34→import {
+    35→  Card,
+    36→  CardContent,
+    37→  CardDescription,
+    38→  CardHeader,
+    39→  CardTitle,
+    40→} from "@/components/ui/card";
+    41→import { Skeleton } from "@/components/ui/skeleton";
+    42→import {
+    43→  Tooltip as UiTooltip,
+    44→  TooltipContent,
+    45→  TooltipTrigger,
+    46→} from "@/components/ui/tooltip";
+    47→import { fetchAnalytics } from "@/lib/api";
+    48→import { ALL_LABELS, LABEL_META, TAXONOMY } from "@/lib/taxonomy";
+    49→import { cn } from "@/lib/utils";
+    50→
+    51→/** Hex palette mirroring LABEL_META (no blue/purple). */
+    52→const LABEL_HEX: Record<string, string> = {
+    53→  [TAXONOMY.SUPPORTED]: "#34d399",
+    54→  [TAXONOMY.CONTRADICTED]: "#fb7185",
+    55→  [TAXONOMY.MISLEADING]: "#fbbf24",
+    56→  [TAXONOMY.UNVERIFIED]: "#a1a1aa",
+    57→  [TAXONOMY.NOT_ASSESSABLE]: "#5eead4",
+    58→};
+    59→
+    60→const REVIEW_ACTION_HEX: Record<string, string> = {
+    61→  accept: "#34d399",
+    62→  edit: "#fbbf24",
+    63→  reject: "#fb7185",
+    64→};
+    65→
+    66→function fmtPercent(x: number, digits = 1): string {
+    67→  return `${(x * 100).toFixed(digits)}%`;
+    68→}
+    69→
+    70→/** Allowed date-range windows (mirrors the API). */
+    71→const RANGE_OPTIONS = [7, 30, 90] as const;
+    72→type RangeDays = (typeof RANGE_OPTIONS)[number];
+    73→
+    74→/** Aggregate daily rows into weekly buckets for the wider windows. */
+    75→function bucketWeekly(
+    76→  daily: { date: string; total: number; contradicted: number }[]
+    77→): { date: string; total: number; contradicted: number }[] {
+    78→  const weeks = new Map<string, { total: number; contradicted: number }>();
+    79→  for (const day of daily) {
+    80→    const d = new Date(`${day.date}T00:00:00`);
+    81→    // Monday-based week start
+    82→    const weekday = (d.getDay() + 6) % 7;
+    83→    const monday = new Date(d);
+    84→    monday.setDate(d.getDate() - weekday);
+    85→    const key = monday.toISOString().slice(0, 10);
+    86→    const entry = weeks.get(key) ?? { total: 0, contradicted: 0 };
+    87→    entry.total += day.total;
+    88→    entry.contradicted += day.contradicted;
+    89→    weeks.set(key, entry);
+    90→  }
+    91→  return Array.from(weeks.entries())
+    92→    .sort(([a], [b]) => a.localeCompare(b))
+    93→    .map(([date, v]) => ({ date, ...v }));
+    94→}
+    95→
+    96→/* ───────────────────────────── KPI tile ───────────────────────────── */
+    97→
+    98→function KpiTile({
+    99→  icon: Icon,
+   100→  value,
+   101→  label,
+   102→  tip,
+   103→  accent = "text-zinc-500",
+   104→}: {
+   105→  icon: React.ComponentType<{ className?: string }>;
+   106→  value: string;
+   107→  label: string;
+   108→  tip?: string;
+   109→  accent?: string;
+   110→}) {
+   111→  return (
+   112→    <Card className="group border-zinc-800 bg-zinc-900/40 transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-700 hover:shadow-lg hover:shadow-black/20">
+   113→      <CardContent className="p-4">
+   114→        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
+   115→          <Icon className={`size-3.5 shrink-0 ${accent}`} aria-hidden />
+   116→          <span className="truncate">{label}</span>
+   117→          {tip ? (
+   118→            <UiTooltip>
+   119→              <TooltipTrigger asChild>
+   120→                <HelpCircle className="ml-auto size-3 shrink-0 cursor-help text-zinc-600 hover:text-zinc-400" aria-label={tip} />
+   121→              </TooltipTrigger>
+   122→              <TooltipContent side="top" className="max-w-52 text-xs">
+   123→                {tip}
+   124→              </TooltipContent>
+   125→            </UiTooltip>
+   126→          ) : null}
+   127→        </div>
+   128→        <p className="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+   129→          {value}
+   130→        </p>
+   131→      </CardContent>
+   132→    </Card>
+   133→  );
+   134→}
+   135→
+   136→/* ───────────────────────── chart tooltip ───────────────────────── */
+   137→
+   138→interface TooltipPayloadItem {
+   139→  name?: string | number;
+   140→  value?: number | string;
+   141→  color?: string;
+   142→  payload?: Record<string, unknown>;
+   143→}
+   144→
+   145→function ChartTooltip({
+   146→  active,
+   147→  items,
+   148→  fmt,
+   149→}: {
+   150→  active?: boolean;
+   151→  items: TooltipPayloadItem[] | undefined;
+   152→  fmt: (item: TooltipPayloadItem) => { label: string; value: string } | null;
+   153→}) {
+   154→  if (!active || !items?.length) return null;
+   155→  const rows = items.map(fmt).filter((x): x is { label: string; value: string } => x !== null);
+   156→  if (!rows.length) return null;
+   157→  return (
+   158→    <div className="rounded-lg border border-zinc-800 bg-zinc-950/95 px-3 py-2 shadow-xl">
+   159→      {rows.map((r, i) => (
+   160→        <p key={`${r.label}-${i}`} className="text-xs text-zinc-300">
+   161→          <span className="mr-2 inline-block size-2 rounded-full align-middle" style={{ background: items[i]?.color ?? "#a1a1aa" }} aria-hidden />
+   162→          <span className="text-zinc-400">{r.label}</span>{" "}
+   163→          <span className="font-mono tabular-nums text-zinc-100">{r.value}</span>
+   164→        </p>
+   165→      ))}
+   166→    </div>
+   167→  );
+   168→}
+   169→
+   170→/* ───────────────────────────── view ───────────────────────────── */
+   171→
+   172→export function AnalyticsView() {
+   173→  const [days, setDays] = useState<RangeDays>(7);
+   174→  const { data, isLoading, isError, refetch } = useQuery({
+   175→    queryKey: ["analytics", days],
+   176→    queryFn: () => fetchAnalytics(days),
+   177→  });
+   178→
+   179→  if (isLoading) {
+   180→    return (
+   181→      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+   182→        <Skeleton className="mb-6 h-8 w-64" />
+   183→        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+   184→          {Array.from({ length: 6 }).map((_, i) => (
+   185→            <Skeleton key={i} className="h-24 rounded-lg" />
+   186→          ))}
+   187→        </div>
+   188→        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+   189→          {Array.from({ length: 4 }).map((_, i) => (
+   190→            <Skeleton key={i} className="h-72 rounded-lg" />
+   191→          ))}
+   192→        </div>
+   193→      </div>
+   194→    );
+   195→  }
+   196→
+   197→  if (isError || !data) {
+   198→    return (
+   199→      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+   200→        <Card className="border-zinc-800 bg-zinc-900/40">
+   201→          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
+   202→            <AlertTriangle className="size-8 text-amber-300" aria-hidden />
+   203→            <p className="text-sm text-zinc-300">Analytics are unavailable right now.</p>
+   204→            <Button variant="outline" size="sm" onClick={() => refetch()}>
+   205→              <RotateCcw className="mr-2 size-3.5" aria-hidden />
+   206→              Retry
+   207→            </Button>
+   208→          </CardContent>
+   209→        </Card>
+   210→      </div>
+   211→    );
+   212→  }
+   213→
+   214→  const totalVerdicts = ALL_LABELS.reduce((s, l) => s + (data.verdictMix[l] ?? 0), 0);
+   215→  const donutData = ALL_LABELS.filter((l) => (data.verdictMix[l] ?? 0) > 0).map((l) => ({
+   216→    label: l,
+   217→    name: LABEL_META[l].short,
+   218→    value: data.verdictMix[l] ?? 0,
+   219→  }));
+   220→
+   221→  // 7d stays daily; wider windows aggregate to weekly buckets so labels stay readable
+   222→  const isWeekly = days > 7;
+   223→  const volumeRows = isWeekly ? bucketWeekly(data.dailyVolume) : data.dailyVolume;
+   224→  const dailyData = volumeRows.map((d) => ({
+   225→    ...d,
+   226→    day: isWeekly
+   227→      ? format(new Date(`${d.date}T00:00:00`), "MMM d")
+   228→      : format(new Date(`${d.date}T00:00:00`), "EEE"),
+   229→  }));
+   230→  const rangeAnalyses = data.rangeTotals?.analyses;
+   231→  const rangeReviews = data.rangeTotals?.reviews;
+   232→
+   233→  const reviewData = (["accept", "edit", "reject"] as const)
+   234→    .map((k) => ({ action: k, count: data.reviewActions[k] ?? 0 }))
+   235→    .filter((r) => r.count > 0);
+   236→
+   237→  const fairnessData = data.fairnessByTopic.slice(0, 6).map((t) => ({
+   238→    ...t,
+   239→    shareLabel: `${Math.round(t.contradictedShare * 100)}% · ${t.total}`,
+   240→  }));
+   241→
+   242→  const totalReviews = reviewData.reduce((s, r) => s + r.count, 0);
+   243→
+   244→  return (
+   245→    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+   246→      {/* header + range selector */}
+   247→      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+   248→        <div>
+   249→          <h1 className="text-xl font-semibold text-zinc-100">Operations analytics</h1>
+   250→          <p className="mt-1 text-sm text-zinc-500">
+   251→            Volume, verdict mix, abstention, overrides, latency and fairness (BR-16/17).
+   252→          </p>
+   253→        </div>
+   254→        <div
+   255→          role="group"
+   256→          aria-label="Date range"
+   257→          className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1"
+   258→        >
+   259→          {RANGE_OPTIONS.map((option) => (
+   260→            <button
+   261→              key={option}
+   262→              type="button"
+   263→              aria-pressed={days === option}
+   264→              onClick={() => setDays(option)}
+   265→              className={cn(
+   266→                "flex h-7 items-center gap-1.5 rounded-md px-2.5 font-mono text-[11px] font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40",
+   267→                days === option
+   268→                  ? "bg-zinc-800 text-zinc-100"
+   269→                  : "text-zinc-500 hover:text-zinc-300"
+   270→              )}
+   271→            >
+   272→              <span
+   273→                aria-hidden
+   274→                className={cn(
+   275→                  "size-1.5 rounded-full transition-colors",
+   276→                  days === option ? "bg-emerald-400" : "bg-zinc-700"
+   277→                )}
+   278→              />
+   279→              {option}d
+   280→            </button>
+   281→          ))}
+   282→        </div>
+   283→      </header>
+   284→
+   285→      {/* KPI tiles */}
+   286→      <section aria-label="Key metrics" className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+   287→        <KpiTile
+   288→          icon={FileSearch}
+   289→          value={data.totals.analyses.toLocaleString()}
+   290→          label="Analyses"
+   291→          accent="text-emerald-400/80"
+   292→          tip={
+   293→            typeof rangeAnalyses === "number"
+   294→              ? `${rangeAnalyses.toLocaleString()} in the last ${days} days`
+   295→              : undefined
+   296→          }
+   297→        />
+   298→        <KpiTile
+   299→          icon={BookOpenCheck}
+   300→          value={data.totals.reviews.toLocaleString()}
+   301→          label="Reviews"
+   302→          accent="text-teal-400/80"
+   303→          tip={
+   304→            typeof rangeReviews === "number"
+   305→              ? `${rangeReviews.toLocaleString()} in the last ${days} days`
+   306→              : undefined
+   307→          }
+   308→        />
+   309→        <KpiTile
+   310→          icon={ScrollText}
+   311→          value={data.totals.appeals.toLocaleString()}
+   312→          label="Appeals"
+   313→          accent="text-amber-400/80"
+   314→        />
+   315→        <KpiTile
+   316→          icon={HelpCircle}
+   317→          value={fmtPercent(data.abstentionRate)}
+   318→          label="Abstention"
+   319→          accent="text-zinc-400"
+   320→          tip="Share of analyses the system responsibly abstained on"
+   321→        />
+   322→        <KpiTile
+   323→          icon={Gauge}
+   324→          value={fmtPercent(data.overrideRate)}
+   325→          label="Override rate"
+   326→          accent="text-rose-400/80"
+   327→          tip="Reviews where the human changed the model's recommendation"
+   328→        />
+   329→        <KpiTile
+   330→          icon={Gauge}
+   331→          value={`${data.latency.p95.toLocaleString()} ms`}
+   332→          label="Latency p95"
+   333→          accent="text-emerald-400/80"
+   334→        />
+   335→      </section>
+   336→
+   337→      {/* charts row 1 */}
+   338→      <section aria-label="Verdict mix and daily volume" className="mt-4 grid gap-4 lg:grid-cols-2">
+   339→        <Card className="border-zinc-800 bg-zinc-900/40">
+   340→          <CardHeader className="p-4 pb-0">
+   341→            <CardTitle className="text-sm font-medium text-zinc-200">Verdict mix</CardTitle>
+   342→            <CardDescription className="text-xs">
+   343→              Overall label distribution across all analyses.
+   344→            </CardDescription>
+   345→          </CardHeader>
+   346→          <CardContent className="p-4">
+   347→            <div className="relative h-64" role="img" aria-label={`Donut chart of verdict mix: ${donutData.map((d) => `${d.name} ${d.value}`).join(", ")}`}>
+   348→              <ResponsiveContainer width="100%" height="100%">
+   349→                <PieChart>
+   350→                  <Pie
+   351→                    data={donutData}
+   352→                    dataKey="value"
+   353→                    nameKey="name"
+   354→                    innerRadius="58%"
+   355→                    outerRadius="85%"
+   356→                    paddingAngle={2}
+   357→                    strokeWidth={0}
+   358→                  >
+   359→                    {donutData.map((d) => (
+   360→                      <Cell key={d.label} fill={LABEL_HEX[d.label] ?? "#a1a1aa"} />
+   361→                    ))}
+   362→                  </Pie>
+   363→                  <Tooltip
+   364→                    content={({ active, payload }) => (
+   365→                      <ChartTooltip
+   366→                        active={active}
+   367→                        items={payload as TooltipPayloadItem[] | undefined}
+   368→                        fmt={(item) => {
+   369→                          if (item.name === undefined || item.value === undefined) return null;
+   370→                          const pct = totalVerdicts ? (Number(item.value) / totalVerdicts) * 100 : 0;
+   371→                          return { label: String(item.name), value: `${item.value} (${pct.toFixed(1)}%)` };
+   372→                        }}
+   373→                      />
+   374→                    )}
+   375→                  />
+   376→                </PieChart>
+   377→              </ResponsiveContainer>
+   378→              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+   379→                <span className="font-mono text-2xl font-semibold tabular-nums text-zinc-100">
+   380→                  {totalVerdicts.toLocaleString()}
+   381→                </span>
+   382→                <span className="text-[11px] uppercase tracking-wide text-zinc-500">analyses</span>
+   383→              </div>
+   384→            </div>
+   385→            <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+   386→              {donutData.map((d) => (
+   387→                <li key={d.label} className="flex items-center gap-1.5 text-[11px] text-zinc-400" title={LABEL_META[d.label].description}>
+   388→                  <span className="size-2 rounded-full" style={{ background: LABEL_HEX[d.label] }} aria-hidden />
+   389→                  {LABEL_META[d.label].short}
+   390→                  <span className="font-mono tabular-nums text-zinc-500">{d.value}</span>
+   391→                </li>
+   392→              ))}
+   393→            </ul>
+   394→          </CardContent>
+   395→        </Card>
+   396→
+   397→        <Card className="border-zinc-800 bg-zinc-900/40">
+   398→          <CardHeader className="p-4 pb-0">
+   399→            <CardTitle className="text-sm font-medium text-zinc-200">
+   400→              {isWeekly ? "Weekly volume" : "Daily volume"} ({days} days)
+   401→            </CardTitle>
+   402→            <CardDescription className="text-xs">
+   403→              Analyses per {isWeekly ? "week" : "day"} with Contradicted overlaid
+   404→              {typeof rangeAnalyses === "number" && (
+   405→                <> · <span className="font-mono tabular-nums text-zinc-400">{rangeAnalyses.toLocaleString()}</span> in range</>
+   406→              )}
+   407→              .
+   408→            </CardDescription>
+   409→          </CardHeader>
+   410→          <CardContent className="p-4">
+   411→            <div
+   412→              className="h-64"
+   413→              role="img"
+   414→              aria-label={`Bar chart of analyses per ${isWeekly ? "week" : "day"} for the last ${days} days, with contradicted subset highlighted`}
+   415→            >
+   416→              <ResponsiveContainer width="100%" height="100%">
+   417→                <BarChart data={dailyData} barGap={2} margin={{ top: 8, right: 4, left: -16, bottom: 0 }}>
+   418→                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+   419→                  <XAxis
+   420→                    dataKey="day"
+   421→                    // thin out tick labels when there are many weekly buckets
+   422→                    interval={dailyData.length > 10 ? Math.ceil(dailyData.length / 8) : 0}
+   423→                    tick={{ fontSize: 11, fill: "#a1a1aa" }}
+   424→                    axisLine={{ stroke: "#3f3f46" }}
+   425→                    tickLine={false}
+   426→                  />
+   427→                  <YAxis
+   428→                    allowDecimals={false}
+   429→                    tick={{ fontSize: 11, fill: "#a1a1aa" }}
+   430→                    axisLine={false}
+   431→                    tickLine={false}
+   432→                  />
+   433→                  <Tooltip
+   434→                    cursor={{ fill: "rgba(63,63,70,0.25)" }}
+   435→                    content={({ active, payload, label }) => (
+   436→                      <ChartTooltip
+   437→                        active={active}
+   438→                        items={payload as TooltipPayloadItem[] | undefined}
+   439→                        fmt={(item) =>
+   440→                          item.name !== undefined
+   441→                            ? {
+   442→                                label: `${label ?? ""} ${String(item.name)}`,
+   443→                                value: String(item.value ?? 0),
+   444→                              }
+   445→                            : null
+   446→                        }
+   447→                      />
+   448→                    )}
+   449→                  />
+   450→                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" radius={[3, 3, 0, 0]} maxBarSize={26} />
+   451→                  <Bar dataKey="contradicted" name="Contradicted" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[3, 3, 0, 0]} maxBarSize={26} />
+   452→                </BarChart>
+   453→              </ResponsiveContainer>
+   454→            </div>
+   455→          </CardContent>
+   456→        </Card>
+   457→      </section>
+   458→
+   459→      {/* charts row 2 */}
+   460→      <section aria-label="Review actions and fairness by topic" className="mt-4 grid gap-4 lg:grid-cols-2">
+   461→        <Card className="border-zinc-800 bg-zinc-900/40">
+   462→          <CardHeader className="p-4 pb-0">
+   463→            <CardTitle className="text-sm font-medium text-zinc-200">Review actions</CardTitle>
+   464→            <CardDescription className="text-xs">
+   465→              Human decisions on model recommendations ({totalReviews.toLocaleString()} reviews).
+   466→            </CardDescription>
+   467→          </CardHeader>
+   468→          <CardContent className="p-4">
+   469→            <div className="h-56" role="img" aria-label="Horizontal bar chart of review actions: accept, edit, reject">
+   470→              <ResponsiveContainer width="100%" height="100%">
+   471→                <BarChart data={reviewData} layout="vertical" margin={{ top: 4, right: 36, left: 6, bottom: 4 }}>
+   472→                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: "#a1a1aa" }} axisLine={false} tickLine={false} />
+   473→                  <YAxis
+   474→                    type="category"
+   475→                    dataKey="action"
+   476→                    width={62}
+   477→                    tick={{ fontSize: 11, fill: "#d4d4d8" }}
+   478→                    axisLine={false}
+   479→                    tickLine={false}
+   480→                    tickFormatter={(v: string) => v.charAt(0).toUpperCase() + v.slice(1)}
+   481→                  />
+   482→                  <Tooltip
+   483→                    cursor={{ fill: "rgba(63,63,70,0.25)" }}
+   484→                    content={({ active, payload }) => (
+   485→                      <ChartTooltip
+   486→                        active={active}
+   487→                        items={payload as TooltipPayloadItem[] | undefined}
+   488→                        fmt={(item) => {
+   489→                          const action = item.payload?.action;
+   490→                          return action
+   491→                            ? {
+   492→                                label: `${String(action).charAt(0).toUpperCase() + String(action).slice(1)} reviews`,
+   493→                                value: String(item.value ?? 0),
+   494→                              }
+   495→                            : null;
+   496→                        }}
+   497→                      />
+   498→                    )}
+   499→                  />
+   500→                  <Bar dataKey="count" radius={[0, 3, 3, 0]} maxBarSize={22}>
+   501→                    {reviewData.map((r) => (
+   502→                      <Cell key={r.action} fill={REVIEW_ACTION_HEX[r.action] ?? "#a1a1aa"} />
+   503→                    ))}
+   504→                    <LabelList
+   505→                      dataKey="count"
+   506→                      position="right"
+   507→                      style={{ fill: "#a1a1aa", fontSize: 11, fontFamily: "var(--font-mono)" }}
+   508→                    />
+   509→                  </Bar>
+   510→                </BarChart>
+   511→              </ResponsiveContainer>
+   512→            </div>
+   513→            <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+   514→              <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-emerald-400" aria-hidden />Accepted</li>
+   515→              <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-amber-400" aria-hidden />Edited (override)</li>
+   516→              <li className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-rose-400" aria-hidden />Rejected (override)</li>
+   517→            </ul>
+   518→          </CardContent>
+   519→        </Card>
+   520→
+   521→        <Card className="border-zinc-800 bg-zinc-900/40">
+   522→          <CardHeader className="p-4 pb-0">
+   523→            <CardTitle className="text-sm font-medium text-zinc-200">Fairness by topic (BR-17)</CardTitle>
+   524→            <CardDescription className="text-xs">
+   525→              Contradicted share per topic — subgroup gaps are surfaced for oversight.
+   526→            </CardDescription>
+   527→          </CardHeader>
+   528→          <CardContent className="p-4">
+   529→            <div className="h-56" role="img" aria-label="Horizontal bar chart of contradicted share by topic for the top 6 topics">
+   530→              <ResponsiveContainer width="100%" height="100%">
+   531→                <BarChart data={fairnessData} layout="vertical" margin={{ top: 4, right: 48, left: 4, bottom: 4 }}>
+   532→                  <XAxis type="number" domain={[0, 1]} tickFormatter={(v: number) => `${Math.round(v * 100)}%`} tick={{ fontSize: 11, fill: "#a1a1aa" }} axisLine={false} tickLine={false} />
+   533→                  <YAxis
+   534→                    type="category"
+   535→                    dataKey="topic"
+   536→                    width={96}
+   537→                    tick={{ fontSize: 11, fill: "#d4d4d8" }}
+   538→                    axisLine={false}
+   539→                    tickLine={false}
+   540→                    tickFormatter={(v: string) => (v.length > 14 ? `${v.slice(0, 13)}…` : v)}
+   541→                  />
+   542→                  <Tooltip
+   543→                    cursor={{ fill: "rgba(63,63,70,0.25)" }}
+   544→                    content={({ active, payload }) => (
+   545→                      <ChartTooltip
+   546→                        active={active}
+   547→                        items={payload as TooltipPayloadItem[] | undefined}
+   548→                        fmt={(item) => {
+   549→                          const p = item.payload;
+   550→                          return p
+   551→                            ? {
+   552→                                label: `${String(p.topic)} — contradicted share of ${String(p.total)} analyses`,
+   553→                                value: fmtPercent(Number(p.contradictedShare ?? 0), 0),
+   554→                              }
+   555→                            : null;
+   556→                        }}
+   557→                      />
+   558→                    )}
+   559→                  />
+   560→                  <Bar dataKey="contradictedShare" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[0, 3, 3, 0]} maxBarSize={18}>
+   561→                    <LabelList
+   562→                      dataKey="shareLabel"
+   563→                      position="right"
+   564→                      style={{ fill: "#a1a1aa", fontSize: 10, fontFamily: "var(--font-mono)" }}
+   565→                    />
+   566→                  </Bar>
+   567→                </BarChart>
+   568→              </ResponsiveContainer>
+   569→            </div>
+   570→            <p className="mt-2 text-[11px] leading-relaxed text-zinc-500">
+   571→              Subgroup gaps are surfaced, not hidden — see known limitations in the model card.
+   572→            </p>
+   573→          </CardContent>
+   574→        </Card>
+   575→      </section>
+   576→
+   577→      {/* latency + SLA strip */}
+   578→      <Card className="mt-4 border-zinc-800 bg-zinc-900/40">
+   579→        <CardContent className="p-4">
+   580→          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+   581→            <div>
+   582→              <dt className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
+   583→                <Gauge className="size-3.5" aria-hidden /> Latency p50
+   584→              </dt>
+   585→              <dd className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-zinc-100">
+   586→                {data.latency.p50.toLocaleString()} <span className="text-xs font-normal text-zinc-500">ms</span>
+   587→              </dd>
+   588→            </div>
+   589→            <div>
+   590→              <dt className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
+   591→                <Gauge className="size-3.5" aria-hidden /> Latency p95
+   592→              </dt>
+   593→              <dd className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-zinc-100">
+   594→                {data.latency.p95.toLocaleString()} <span className="text-xs font-normal text-zinc-500">ms</span>
+   595→              </dd>
+   596→            </div>
+   597→            <div>
+   598→              <dt className="text-[11px] uppercase tracking-wide text-zinc-500">Samples</dt>
+   599→              <dd className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-zinc-100">
+   600→                {data.latency.samples.toLocaleString()}
+   601→              </dd>
+   602→            </div>
+   603→            <div>
+   604→              <dt className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
+   605→                <Clock className="size-3.5" aria-hidden /> Appeal median
+   606→              </dt>
+   607→              <dd className="mt-1.5 font-mono text-lg font-semibold tabular-nums text-zinc-100">
+   608→                {data.appealMedianResolutionHours === null ? (
+   609→                  <span className="text-sm font-normal text-zinc-500">No resolutions yet</span>
+   610→                ) : (
+   611→                  <>
+   612→                    {data.appealMedianResolutionHours.toFixed(1)}
+   613→                    <span className="text-xs font-normal text-zinc-500"> h to resolve</span>
+   614→                  </>
+   615→                )}
+   616→              </dd>
+   617→            </div>
+   618→          </dl>
+   619→          <p className="mt-3 border-t border-zinc-800 pt-3 text-[11px] text-zinc-500">
+   620→            Target: triage &lt; 10s p95 (BRD NFR). Latency measured end-to-end per analysis request.
+   621→          </p>
+   622→        </CardContent>
+   623→      </Card>
+   624→    </div>
+   625→  );
+   626→}
+   627→

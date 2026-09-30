@@ -120,11 +120,14 @@ export function fetchAnalytics(days?: number) {
   return jsonFetch<AnalyticsDTO>(`/api/analytics${qs}`);
 }
 
-export function fetchAudit(params: { action?: string; entityType?: string; page?: number }) {
+export function fetchAudit(
+  params: { action?: string; entityType?: string; page?: number; pageSize?: number }
+) {
   const search = new URLSearchParams();
   if (params.action) search.set("action", params.action);
   if (params.entityType) search.set("entityType", params.entityType);
   search.set("page", String(params.page ?? 1));
+  if (params.pageSize) search.set("pageSize", String(params.pageSize));
   return jsonFetch<{
     logs: AuditLogDTO[];
     total: number;

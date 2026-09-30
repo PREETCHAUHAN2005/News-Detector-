@@ -15,6 +15,34 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
+/** Relative change vs previous period; null when undividable (prev = 0). */
+function relDelta(current: number, previous: number): number | null {
+  if (previous === 0) return current === 0 ? 0 : null;
+  return (current - previous) / previous;
+}
+
+interface TrendPoint {
+  current: number;
+  previous: number;
+  /** relative fraction for counts/latency, absolute percentage points for rates */
+  delta: number | null;
+}
+
+interface Trends {
+  analyses: TrendPoint;
+  reviews: TrendPoint;
+  abstention: TrendPoint;
+  override: TrendPoint;
+  latencyP95: TrendPoint;
+}
+
+function latenciesOf(rows: { latencyMs: number | null }[]): number[] {
+  return rows
+    .map((a) => a.latencyMs)
+    .filter((x): x is number => typeof x === "number" && x > 0)
+    .sort((a, b) => a - b);
+}
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -94,11 +122,54 @@ export async function GET(req: Request) {
       ? resolutionHours[Math.floor(resolutionHours.length / 2)]
       : null;
 
-    // range-scoped volume + review counts (for the date-range selector)
-    const [rangeAnalyses, rangeReviews] = await Promise.all([
-      db.analysis.count({ where: { createdAt: { gte: since } } }),
-      db.review.count({ where: { createdAt: { gte: since } } }),
+    // Previous window for period-over-period KPI trends (BR-16 ops insight).
+    const prevSince = new Date(since.getTime() - days * 24 * 60 * 60 * 1000);
+    const [prevDaily, reviewsByActionRange, reviewsByActionPrev] = await Promise.all([
+      db.analysis.findMany({
+        where: { createdAt: { gte: prevSince, lt: since } },
+        select: { createdAt: true, overallLabel: true, latencyMs: true },
+      }),
+      db.review.groupBy({
+        by: ["action"],
+        _count: { _all: true },
+        where: { createdAt: { gte: since } },
+      }),
+      db.review.groupBy({
+        by: ["action"],
+        _count: { _all: true },
+        where: { createdAt: { gte: prevSince, lt: since } },
+      }),
     ]);
+
+    // Range-scoped totals derived from the window queries above (no extra round-trip).
+    const rangeAnalyses = daily.length;
+    const rangeReviews = reviewsByActionRange.reduce((s, r) => s + r._count._all, 0);
+
+    // Period-over-period trends.
+    const curAbstain = daily.length
+      ? daily.filter((a) => a.overallLabel === TAXONOMY.UNVERIFIED).length / daily.length
+      : 0;
+    const prevAbstain = prevDaily.length
+      ? prevDaily.filter((a) => a.overallLabel === TAXONOMY.UNVERIFIED).length / prevDaily.length
+      : 0;
+    const curLat = percentile(latenciesOf(daily), 95);
+    const prevLat = percentile(latenciesOf(prevDaily), 95);
+    const sumActions = (rows: { action: string; _count: { _all: number } }[]) =>
+      rows.reduce((s, r) => s + r._count._all, 0);
+    const sumOverrides = (rows: { action: string; _count: { _all: number } }[]) =>
+      rows
+        .filter((r) => r.action === "edit" || r.action === "reject")
+        .reduce((s, r) => s + r._count._all, 0);
+    const prevReviews = sumActions(reviewsByActionPrev);
+    const curOverrideRate = rangeReviews ? sumOverrides(reviewsByActionRange) / rangeReviews : 0;
+    const prevOverrideRate = prevReviews ? sumOverrides(reviewsByActionPrev) / prevReviews : 0;
+    const trends: Trends = {
+      analyses: { current: rangeAnalyses, previous: prevDaily.length, delta: relDelta(rangeAnalyses, prevDaily.length) },
+      reviews: { current: rangeReviews, previous: prevReviews, delta: relDelta(rangeReviews, prevReviews) },
+      abstention: { current: curAbstain, previous: prevAbstain, delta: prevDaily.length ? curAbstain - prevAbstain : null },
+      override: { current: curOverrideRate, previous: prevOverrideRate, delta: prevReviews ? curOverrideRate - prevOverrideRate : null },
+      latencyP95: { current: curLat, previous: prevLat, delta: relDelta(curLat, prevLat) },
+    };
 
     // fairness (BR-17): verdict mix by topic
     const topicStats = await Promise.all(
@@ -122,6 +193,8 @@ export async function GET(req: Request) {
     return NextResponse.json({
       days,
       rangeTotals: { analyses: rangeAnalyses, reviews: rangeReviews },
+      trends,
+      sparkline: Array.from(dayMap.values()).map((v) => v.total),
       totals: {
         analyses: total,
         reviews: totalReviews,

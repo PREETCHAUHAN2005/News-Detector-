@@ -11,6 +11,7 @@ import { formatDistanceToNow } from "date-fns";
 import {
   ArrowRight,
   BookMarked,
+  ClipboardCheck,
   FlaskConical,
   Inbox,
   Info,
@@ -73,6 +74,15 @@ export function HomeView() {
     queryFn: () => fetchAnalyses({ pageSize: 8 }),
   });
   const recent: AnalysisDTO[] = recentQuery.data?.analyses ?? [];
+
+  // pending-review count for the reviewer CTA (shares the sidebar's cache)
+  const pendingQuery = useQuery({
+    queryKey: ["analyses", "pending-count"],
+    queryFn: () => fetchAnalyses({ status: "pending_review", pageSize: 1 }),
+  });
+  const pendingCount = pendingQuery.data?.total ?? 0;
+  const role = (session?.user as { role?: string } | undefined)?.role ?? "viewer";
+  const canReview = ["reviewer", "senior_reviewer", "admin"].includes(role);
 
   const analyzeMutation = useMutation({
     mutationFn: (input: string) => analyzeText(input),
@@ -152,6 +162,44 @@ export function HomeView() {
             cited evidence, and recommends a graded verdict for human review.
           </p>
         </motion.section>
+
+        {/* Reviewer CTA — jump straight into the queue when work is waiting */}
+        {canReview && pendingCount > 0 && (
+          <motion.section
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, delay: 0.03, ease: "easeOut" }}
+            aria-label="Pending review"
+          >
+            <div className="group flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/35 bg-gradient-to-r from-amber-500/[0.13] to-transparent p-3.5 shadow-[inset_0_1px_0_0_rgba(251,191,36,0.08)] transition-colors hover:border-amber-500/50">
+              <span
+                className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10"
+                aria-hidden
+              >
+                <ClipboardCheck className="size-4 text-amber-300" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-zinc-100">
+                  <span className="font-mono tabular-nums text-amber-300">{pendingCount}</span>{" "}
+                  {pendingCount === 1 ? "analysis is" : "analyses are"} awaiting human review
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Evidence is shown before each recommendation — high-impact claims need a senior
+                  second sign-off (BR-12).
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setView("review")}
+                className="h-8 shrink-0 border-amber-500/30 bg-amber-500/10 text-xs text-amber-200 hover:border-amber-500/50 hover:bg-amber-500/20 hover:text-amber-100"
+              >
+                Open review queue
+                <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden />
+              </Button>
+            </div>
+          </motion.section>
+        )}
 
         {/* Composer */}
         <motion.section

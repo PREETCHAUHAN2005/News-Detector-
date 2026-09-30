@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
+import { ChevronDown, Keyboard, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
 import { fetchModelCard } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
@@ -24,6 +24,7 @@ export function AppTopbar({ title }: { title: string }) {
   const { data: session, status } = useSession();
   const [mobileNav, setMobileNav] = useState(false);
   const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
+  const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
   const authenticated = status === "authenticated";
   const { data: cardData } = useQuery({
     queryKey: ["model-card"],
@@ -77,6 +78,17 @@ export function AppTopbar({ title }: { title: string }) {
             <Search className="size-3.5" aria-hidden />
             <span className="text-xs">Search…</span>
             <kbd className="veritas-kbd">⌘K</kbd>
+          </button>
+        )}
+        {authenticated && (
+          <button
+            type="button"
+            onClick={() => setShortcutsOpen(true)}
+            title="Keyboard shortcuts (?)"
+            aria-label="Show keyboard shortcuts"
+            className="ml-1 hidden size-7 items-center justify-center rounded-md border border-zinc-800 bg-zinc-900/60 text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 sm:flex"
+          >
+            <Keyboard className="size-3.5" aria-hidden />
           </button>
         )}
       </div>

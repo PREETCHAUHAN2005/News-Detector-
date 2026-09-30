@@ -1,11 +1,13 @@
 "use client";
 /** Veritas — single-route application shell (Cursor-style workbench). */
 import { useSession } from "next-auth/react";
+import { AnimatePresence, motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { Providers } from "@/components/providers";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppTopbar } from "@/components/app-topbar";
 import { CommandPalette } from "@/components/command-palette";
+import { KeyboardShortcuts } from "@/components/shortcuts-help";
 import { StatusBar } from "@/components/status-bar";
 import { VeritasLogo } from "@/components/veritas-logo";
 import { useAppStore } from "@/lib/store";
@@ -66,10 +68,23 @@ function VeritasApp() {
       <div className="flex min-w-0 flex-1 flex-col">
         <AppTopbar title={VIEW_TITLES[view] ?? "Veritas"} />
         <main className="min-h-0 flex-1 overflow-y-auto" id="main-content">
-          <SessionGate />
+          {/* subtle cross-fade between workbench views */}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={view}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
+              className="min-h-full"
+            >
+              <SessionGate />
+            </motion.div>
+          </AnimatePresence>
         </main>
         <StatusBar />
         <CommandPalette />
+        <KeyboardShortcuts />
       </div>
     </div>
   );

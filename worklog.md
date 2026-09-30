@@ -207,3 +207,31 @@ Stage Summary:
 - 1 regression-free QA pass; 4 new features (date-range analytics w/ weekly bucketing, live pending badge, palette sign-out, saved filters); 1 new bug found+fixed (pre-auth query 401-stick in sidebar); styling polish (KPI accents, queue status bars, tactile chips).
 - Demo state note: analysis #springfield-monorail (prediction claim) now in_review after Priya's accept during badge-live-update testing — demonstrates BR-12 awaiting-senior state.
 - Unresolved / next-phase candidates: (1) engine supervision still manual; (2) release gates honestly failing (shadow-mode by design); (3) VLM-suggested KPI sparklines/deltas (needs backend period-over-period computation); (4) bulk queue actions REJECTED for BRD safety; (5) palette could gain more actions (export current dossier, toggle theme) and mid-typing recents refresh.
+
+---
+Task ID: 12
+Agent: Main (Z.ai Code)
+Task: Round 4 — regression QA + 5 new features + styling polish (KPI trends, palette export, shortcuts help, audit CSV, engine watchdog)
+
+Work Log:
+- Status assessment: all services healthy (Next 3000, engine 8001, /api/health ok), lint clean.
+- agent-browser regression QA (fresh session qa4): signin → home (pending badge live 5→6 after analyze) → BR-08 dedup-reuse analyze → evidence-first dossier → review queue → analytics 7d/30d/90d + weekly bucketing → appeals/audit/model-card → palette → mobile 390×844 no overflow → 0 console errors. NO BUGS FOUND — phase stable, proceeded to features.
+- FEATURE 1 — KPI period-over-period trends + sparklines (worklog Task-11 candidate #3):
+  * /api/analytics: previous-window queries (analyses + review-action groupBys); trends {analyses, reviews, abstention, override, latencyP95} each {current, previous, delta} (relative % for counts/latency, absolute pp for rates; null when previous window empty — rate deltas null-gated on empty prev data); sparkline = daily totals array; rangeTotals now DERIVED from window queries (2 fewer DB round-trips).
+  * analytics-view: new Sparkline inline SVG (72×24, area fill, baseline ref line, endpoint dot, emerald rising/rose falling) + DeltaChip (TrendingUp/Down icon, +%/pp magnitude, "vs prev Nd", direction-aware emerald/rose/zinc, "new in this window"/"flat" states); KpiTile gets delta+sparkline+days props, tooltip appends previous-window value.
+  * scripts/backfill-history.ts (idempotent): 14 historical analyses 10–80 days old w/ engine verdicts + backdated reviews + audit rows → 30d/90d windows have real deltas (+4100% analyses 7d, −52.4pp abstention, etc).
+- FEATURE 2 — Palette "Export current dossier" action: report builder extracted to src/lib/report.ts (shared by analysis-view + palette); palette reads react-query cache ["analysis", id] and offers Download action when a dossier is open; success/failure toasts. Verified E2E (downloaded veritas-report-cmuome1q.md + toast).
+- FEATURE 3 — Keyboard shortcuts help: src/components/shortcuts-help.tsx (Dialog, 3 sections, veritas-kbd chips, BR-11 footer note); "?" hotkey (input/textarea/contenteditable guarded, no meta/ctrl/alt); topbar Keyboard icon button next to ⌘K; store gains shortcutsOpen state. Verified via "?" key and topbar button.
+- FEATURE 4 — Audit CSV export (BR-13 governance): RFC-4180-escaped client-side CSV builder; exports ALL rows matching current filters (paged fetches, 100/page, cap 1,000) → veritas-audit-YYYYMMDD-HHmm.csv; Exporting… spinner + count toast. Verified E2E (116 events exported). fetchAudit gains pageSize param.
+- FEATURE 5 — Engine watchdog (worklog risk #1 RESOLVED): scripts/engine-watchdog.ts (bun) pings healthz every 30s, respawns `bun run dev` in mini-services/nlp-engine on failure, 60s warmup wait; runs detached, logs to mini-services/nlp-engine/watchdog.log. VERIFIED: killed engine → watchdog detected in 30s → restarted → healthy in 12s.
+- STYLING: evidence cards get similarity meter bars (role=meter, emerald ≥80%/amber ≥60%/zinc below, ARIA label); Home reviewer CTA banner (amber gradient card, pending count mono, "Open review queue" button, roles reviewer/senior/admin only, shares sidebar cache); view cross-fade transitions (AnimatePresence keyed by view, 160ms); topbar "?" button; VLM-driven polish: delta chips brighter (-300 shades), sparkline rose-falling + baseline + thicker stroke + bigger endpoint dot, daily-volume base bar 55% opacity, CTA banner more saturated amber + inset highlight, evidence match% bold text-zinc-400, evidence card bg /70.
+- OPS INCIDENT (root-caused): dev server died mid-round — kernel OOM killed next-server because full-repo `bunx tsc --noEmit` (compiling examples/ + skills/ too) exhausted 4GB sandbox RAM. MITIGATION: added tsconfig.typecheck.json (src-only include) — all future typechecks use `bunx tsc --noEmit -p tsconfig.typecheck.json`; dev server restarted detached (setsid).
+- Verification: lint clean; scoped tsc clean; all 5 features + polish verified in browser; VLM re-review analytics 7.5→8/10, home 8/10 ("compelling amber CTA"); mobile 390×844 no overflow; console clean after fresh reload (4 mid-edit HMR errors confirmed stale).
+- QA screenshots: docs/qa/qa4-01…qa4-13-*.png.
+
+Stage Summary:
+- 0 bugs found in regression QA; 5 new features (KPI trends+sparklines w/ backfilled history, palette dossier export, shortcuts help, audit CSV export, engine watchdog); styling polish round incl. VLM-feedback fixes; OOM root cause fixed via scoped typecheck config.
+- All BRD safety properties intact (evidence-first, abstention, BR-08 reuse verified during QA).
+- Services: Next 3000 + engine 8001 + watchdog (engine auto-restart verified live).
+- Demo accounts: reviewer/senior/admin/viewer @veritas.io / veritas123.
+- Unresolved / next-phase candidates: (1) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design per BRD §14); (2) i18n + live web retrieval remain Phase 4; (3) possible future UX: review-queue j/k keyboard nav, analytics fairness drill-down per topic, palette "recently exported" list; (4) watchdog + dev server still die on full sandbox restart — re-run `setsid bun run scripts/engine-watchdog.ts >> mini-services/nlp-engine/watchdog.log 2>&1 &` and restart dev server if that happens.

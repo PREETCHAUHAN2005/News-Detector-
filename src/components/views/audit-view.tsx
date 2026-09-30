@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Download,
+  Loader2,
   RotateCcw,
   ScrollText,
 } from "lucide-react";
@@ -35,6 +37,8 @@ import {
 import { fetchAudit } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
+import type { AuditLogDTO } from "@/types/api";
 
 const ENTITY_TYPES = ["analysis", "verdict", "appeal", "trusted_source"] as const;
 
@@ -84,12 +88,43 @@ function DetailCell({ raw }: { raw: string | null | undefined }) {
   );
 }
 
+/** RFC-4180 CSV cell escaping. */
+function csvCell(value: string): string {
+  if (/[",\n\r]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+/** Build the CSV document for a set of audit rows. */
+function buildAuditCsv(rows: AuditLogDTO[]): string {
+  const header = ["id", "timestamp", "actor", "role", "action", "entity_type", "entity_id", "detail"];
+  const lines = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.id,
+        new Date(r.createdAt).toISOString(),
+        r.actor?.name ?? "system",
+        r.actor?.role ?? "",
+        r.action,
+        r.entityType,
+        r.entityId,
+        r.detail ?? "",
+      ]
+        .map((c) => csvCell(String(c)))
+        .join(",")
+    );
+  }
+  return lines.join("\n");
+}
+
 /* ───────────────────────────── view ───────────────────────────── */
 
 export function AuditView() {
   const [action, setAction] = useState("all");
   const [entityType, setEntityType] = useState("all");
   const [page, setPage] = useState(1);
+  const [exporting, setExporting] = useState(false);
+  const { toast } = useToast();
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ["audit", action, entityType, page],
@@ -111,6 +146,54 @@ export function AuditView() {
   const actionOptions = [...(data?.availableActions ?? [])];
   if (action !== "all" && !actionOptions.includes(action)) actionOptions.push(action);
   actionOptions.sort((a, b) => a.localeCompare(b));
+
+  /** Export every row matching the current filters (capped at 1,000 rows). */
+  async function exportCsv(): Promise<void> {
+    setExporting(true);
+    try {
+      const rows: AuditLogDTO[] = [];
+      const filterAction = action === "all" ? undefined : action;
+      const filterEntity = entityType === "all" ? undefined : entityType;
+      const first = await fetchAudit({
+        action: filterAction,
+        entityType: filterEntity,
+        page: 1,
+        pageSize: 100,
+      });
+      rows.push(...first.logs);
+      const pages = Math.min(10, Math.ceil(first.total / first.pageSize));
+      for (let p = 2; p <= pages; p++) {
+        const next = await fetchAudit({
+          action: filterAction,
+          entityType: filterEntity,
+          page: p,
+          pageSize: 100,
+        });
+        rows.push(...next.logs);
+      }
+      const blob = new Blob([buildAuditCsv(rows)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `veritas-audit-${format(new Date(), "yyyyMMdd-HHmm")}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast({
+        title: "Audit log exported",
+        description: `${rows.length.toLocaleString()} events as CSV${rows.length >= 1000 ? " (capped at 1,000)" : ""}.`,
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description: "The audit trail could not be exported right now.",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
@@ -174,6 +257,25 @@ export function AuditView() {
         <span className="ml-auto font-mono text-xs tabular-nums text-zinc-500">
           {total.toLocaleString()} events
         </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 border-zinc-800 bg-zinc-900/60 text-xs text-zinc-300 hover:border-zinc-700"
+          onClick={() => void exportCsv()}
+          disabled={exporting || total === 0}
+        >
+          {exporting ? (
+            <>
+              <Loader2 className="mr-1.5 size-3.5 animate-spin" aria-hidden />
+              Exporting…
+            </>
+          ) : (
+            <>
+              <Download className="mr-1.5 size-3.5" aria-hidden />
+              Export CSV
+            </>
+          )}
+        </Button>
       </div>
 
       <Card className="border-zinc-800 bg-zinc-900/40">
