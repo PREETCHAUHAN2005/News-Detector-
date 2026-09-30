@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Keyboard, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
+import { ChevronDown, Keyboard, Loader2, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
 import { fetchModelCard } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
@@ -26,7 +26,7 @@ export function AppTopbar({ title }: { title: string }) {
   const setPaletteOpen = useAppStore((s) => s.setPaletteOpen);
   const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
   const authenticated = status === "authenticated";
-  const { data: cardData } = useQuery({
+  const { data: cardData, isPending: cardPending, isError: cardError } = useQuery({
     queryKey: ["model-card"],
     queryFn: fetchModelCard,
     staleTime: 5 * 60_000,
@@ -103,13 +103,28 @@ export function AppTopbar({ title }: { title: string }) {
             <span className="size-1.5 rounded-full bg-emerald-400 veritas-pulse" aria-hidden />
             {modelVersion}
           </span>
-        ) : (
+        ) : cardError ? (
           <span
             className="hidden items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 font-mono text-[11px] text-amber-300 md:flex"
             title="Engine unreachable — analyses degrade safely to Unverified and queue for human review"
           >
             <ShieldAlert className="size-3" aria-hidden />
             engine offline
+          </span>
+        ) : cardPending && authenticated ? (
+          <span
+            className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 font-mono text-[11px] text-zinc-400 md:flex"
+            title="Checking engine status…"
+          >
+            <Loader2 className="size-3 animate-spin" aria-hidden />
+            engine…
+          </span>
+        ) : (
+          <span
+            className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 font-mono text-[11px] text-zinc-500 md:flex"
+            title="Deterministic retrieval-augmented engine — status shown after sign-in"
+          >
+            veritas-nlp
           </span>
         )}
         <span

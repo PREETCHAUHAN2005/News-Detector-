@@ -16,14 +16,16 @@ import {
   Download,
   FileSearch,
   History,
+  Loader2,
   LogOut,
   ScrollText,
+  Search,
   ShieldCheck,
   Sparkles,
   SquareLibrary,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { fetchAnalyses } from "@/lib/api";
+import { fetchAnalyses, type AnalysesListResponse } from "@/lib/api";
 import { downloadReport } from "@/lib/report";
 import { LABEL_META, type VerdictLabel } from "@/lib/taxonomy";
 import { useAppStore, type ViewId } from "@/lib/store";
@@ -105,6 +107,18 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
     staleTime: 15_000,
   });
 
+  // mid-typing live search (≥3 chars): queries the full history, not just the
+  // cached 8 recents — results refresh as you type (debounced by useQuery key)
+  const trimmed = query.trim();
+  const searchMode = trimmed.length >= 3;
+  const { data: searchResults, isFetching: searchFetching } = useQuery({
+    queryKey: ["palette-search", trimmed],
+    queryFn: () => fetchAnalyses({ q: trimmed, pageSize: 8 }),
+    enabled: searchMode,
+    staleTime: 10_000,
+    placeholderData: (prev: AnalysesListResponse | undefined) => prev,
+  });
+
   // dossier export is offered when a dossier is open and cached
   const cachedDossier = queryClient.getQueryData<{ analysis: AnalysisDTO }>([
     "analysis",
@@ -119,7 +133,10 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       hint: t.hint,
       icon: t.icon,
     }));
-    const analyses: Command[] = (recent?.analyses ?? []).map((a) => ({
+    const analyses: Command[] = (searchMode
+      ? searchResults?.analyses ?? []
+      : recent?.analyses ?? []
+    ).map((a) => ({
       kind: "analysis",
       id: a.id,
       label: a.inputText,
@@ -161,7 +178,7 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       run: () => void signOut({ callbackUrl: "/" }),
     });
     return [...views, ...analyses, ...actions].filter((c) => matches(c, query));
-  }, [recent, query, view, activeAnalysisId, cachedDossier, toast]);
+  }, [recent, searchMode, searchResults, query, view, activeAnalysisId, cachedDossier, toast]);
 
   /* Cursor clamped at render time — never out of range. */
   const cursorSafe = commands.length ? Math.min(cursor, commands.length - 1) : 0;
@@ -267,12 +284,21 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       </div>
 
       <div className="flex items-center gap-3 border-t border-zinc-800 bg-zinc-950/60 px-4 py-2 text-[10px] text-zinc-600">
-        <span className="flex items-center gap-1">
-          <kbd className="veritas-kbd">↑↓</kbd> navigate
-        </span>
-        <span className="flex items-center gap-1">
-          <kbd className="veritas-kbd">↵</kbd> open
-        </span>
+        {searchMode ? (
+          <span className="flex items-center gap-1.5 text-emerald-400/80" title="Live search across the full analysis history (≥3 characters)">
+            {searchFetching ? <Loader2 className="size-3 animate-spin" aria-hidden /> : <Search className="size-3" aria-hidden />}
+            searching full history
+          </span>
+        ) : (
+          <span className="flex items-center gap-1">
+            <kbd className="veritas-kbd">↑↓</kbd> navigate
+          </span>
+        )}
+        {!searchMode && (
+          <span className="flex items-center gap-1">
+            <kbd className="veritas-kbd">↵</kbd> open
+          </span>
+        )}
         <span className="flex items-center gap-1">
           <kbd className="veritas-kbd">esc</kbd> close
         </span>

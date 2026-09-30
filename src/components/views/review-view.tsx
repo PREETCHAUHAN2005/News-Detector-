@@ -368,10 +368,19 @@ export function ReviewView() {
             </Button>
           </div>
         ) : analyses.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-zinc-800 py-16">
-            <Inbox className="size-8 text-zinc-700" aria-hidden />
-            <p className="text-sm text-zinc-400">
-              Queue is clear — no analyses match the current filters.
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-zinc-800 py-16"
+          >
+            <span className="flex size-12 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10">
+              <Inbox className="size-5 text-emerald-400" aria-hidden />
+            </span>
+            <p className="text-sm font-medium text-zinc-300">Queue is clear</p>
+            <p className="max-w-sm text-center text-xs text-zinc-500">
+              No analyses match the current filters — every human decision is logged in the audit
+              trail and every pending item got its verdict.
             </p>
             {hasActiveFilters && (
               <Button
@@ -389,7 +398,7 @@ export function ReviewView() {
                 <RotateCw /> Clear filters
               </Button>
             )}
-          </div>
+          </motion.div>
         ) : (
           analyses.map((analysis, index) => (
             <QueueCard

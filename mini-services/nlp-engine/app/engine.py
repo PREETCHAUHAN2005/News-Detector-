@@ -87,6 +87,40 @@ class VeritasEngine:
 
     # ─────────────────────────── retrieval ───────────────────────────
 
+    def matched_terms(self, claim_text: str, statement: str, limit: int = 10) -> List[str]:
+        """Terms shared between the claim and a retrieved statement, ranked by
+        IDF weight — an exact "why was this evidence retrieved" explanation.
+
+        Uses the production word-channel vocabulary (unigrams + bigrams), so
+        only terms the retrieval model actually indexes are reported. Unigrams
+        fully contained in a matched bigram are dropped to avoid double
+        highlights."""
+        try:
+            claim_idx = set(self.word_vec.transform([claim_text]).indices)
+            stmt_idx = set(self.word_vec.transform([statement]).indices)
+        except ValueError:
+            return []
+        shared = claim_idx & stmt_idx
+        if not shared:
+            return []
+        # vocabulary_ maps term → feature index; idf_ is indexed by feature index
+        inv_vocab = {v: k for k, v in self.word_vec.vocabulary_.items()}
+        idf = self.word_vec.idf_
+        terms = [(inv_vocab[int(i)], float(idf[int(i)])) for i in shared]
+        terms.sort(key=lambda t: (-t[1], -len(t[0])))
+        kept: List[str] = []
+        kept_words: set = set()
+        for term, _w in terms:
+            words = term.lower().split()
+            # skip terms sharing a word with a kept term → non-overlapping highlights
+            if any(w in kept_words for w in words):
+                continue
+            kept.append(term)
+            kept_words.update(words)
+            if len(kept) >= limit:
+                break
+        return kept
+
     def _combined_sims(self, text: str) -> np.ndarray:
         w = cosine_similarity(self.word_vec.transform([text]), self.word_matrix)[0]
         c = cosine_similarity(self.char_vec.transform([text]), self.char_matrix)[0]
@@ -374,6 +408,7 @@ class VeritasEngine:
                             "speakerJob": ev.record.speaker_job,
                             "context": ev.record.context,
                             "subject": ev.record.primary_subject,
+                            "highlights": self.matched_terms(claim.text, ev.record.statement),
                         })
                 entry["verdict"] = {
                     "label": verdict["label"],

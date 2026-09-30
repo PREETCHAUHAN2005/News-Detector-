@@ -172,6 +172,7 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 openAnalysis(a.id);
                 onNavigate?.();
               }}
+              title={a.inputText}
               className="group flex w-full flex-col items-start gap-1 rounded-md border border-transparent px-2.5 py-2 text-left transition-all hover:border-zinc-800 hover:bg-zinc-800/50"
             >
               <span className="line-clamp-2 w-full text-[12px] leading-snug text-zinc-400 transition-colors group-hover:text-zinc-200">

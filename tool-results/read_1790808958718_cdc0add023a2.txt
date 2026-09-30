@@ -1,0 +1,601 @@
+     1→"""Veritas verification engine.
+     2→
+     3→Retrieval-augmented verification over the LIAR knowledge base of
+     4→human-fact-checked statements.
+     5→
+     6→Methodology (see data/raw/PROVENANCE.md and ARCHITECTURE.md §4):
+     7→  * train split  — retrieval knowledge base
+     8→  * valid split  — Platt confidence calibration + safety-threshold tuning
+     9→  * test split   — FROZEN; only ever touched by /v1/eval release gates
+    10→
+    11→The verdict function is TRANSPARENT by design (no black-box stacker):
+    12→dominance-filtered weighted vote over retrieved evidence ratings, with
+    13→Platt-calibrated confidence. When evidence is weak the system abstains —
+    14→that is a feature, not a failure (BRD §6.2 "abstain by default").
+    15→
+    16→Safety properties:
+    17→  * No verdict without retrieved evidence (BR-03 / BR-05).
+    18→  * Style signals are NEVER consulted by the verdict logic (BR-07).
+    19→  * Asymmetric thresholds — Contradicted needs a higher calibrated
+    20→    confidence than Supported (BRD §6.5).
+    21→  * Near-duplicates of published fact-checks reuse the human verdict (BR-08).
+    22→  * Deterministic: same input ⇒ same output (auditability, BRD §6.6).
+    23→"""
+    24→
+    25→from __future__ import annotations
+    26→
+    27→import time
+    28→import urllib.parse
+    29→from dataclasses import dataclass
+    30→from typing import Dict, List, Optional, Tuple
+    31→
+    32→import numpy as np
+    33→from sklearn.feature_extraction.text import TfidfVectorizer
+    34→from sklearn.metrics.pairwise import cosine_similarity
+    35→
+    36→from . import taxonomy
+    37→from .calibration import apply_platt, expected_calibration_error, fit_platt
+    38→from .claims import ExtractedClaim, extract_claims, sanitize
+    39→from .data import KBRecord, load_corpus
+    40→from .style import high_impact, style_signals, time_sensitivity
+    41→
+    42→WORD_WEIGHT = 0.65
+    43→CHAR_WEIGHT = 0.35
+    44→DUPLICATE_STMT_SIM = 0.90   # statement-only similarity ⇒ reuse human verdict (BR-08)
+    45→WORD_SIM_CAP = 0.50         # top similarity considered "full strength" evidence
+    46→EVIDENCE_STRENGTH_FLOOR = 0.35
+    47→CLASSES = [taxonomy.SUPPORTED, taxonomy.MISLEADING, taxonomy.CONTRADICTED]
+    48→
+    49→
+    50→@dataclass
+    51→class RetrievedEvidence:
+    52→    record: KBRecord
+    53→    similarity: float
+    54→    statement_similarity: float = 0.0
+    55→
+    56→    @property
+    57→    def is_duplicate(self) -> bool:
+    58→        return self.statement_similarity >= DUPLICATE_STMT_SIM
+    59→
+    60→
+    61→class VeritasEngine:
+    62→    def __init__(self) -> None:
+    63→        t0 = time.perf_counter()
+    64→        self.corpus = load_corpus()
+    65→        self.kb: List[KBRecord] = self.corpus["kb"]
+    66→        self.n_train = len(self.corpus["splits"]["train"])
+    67→
+    68→        self.word_vec = TfidfVectorizer(
+    69→            sublinear_tf=True, ngram_range=(1, 2), min_df=2, stop_words="english",
+    70→            max_features=50000, lowercase=True, strip_accents="unicode",
+    71→        )
+    72→        self.char_vec = TfidfVectorizer(
+    73→            analyzer="char_wb", ngram_range=(3, 5), min_df=2,
+    74→            max_features=80000, lowercase=True, sublinear_tf=True,
+    75→        )
+    76→        docs = [r.retrieval_doc for r in self.kb]
+    77→        self.word_matrix = self.word_vec.fit_transform(docs)
+    78→        self.char_matrix = self.char_vec.fit_transform(docs)
+    79→        # statement-only channel for BR-08 duplicate reuse (no metadata dilution)
+    80→        self.stmt_matrix = self.word_vec.transform([r.statement for r in self.kb])
+    81→
+    82→        self._fit_calibration()
+    83→        self._tune_safety_thresholds()
+    84→
+    85→        self.startup_seconds = round(time.perf_counter() - t0, 2)
+    86→        self._eval_cache: Optional[Dict] = None
+    87→
+    88→    # ─────────────────────────── retrieval ───────────────────────────
+    89→
+    90→    def _combined_sims(self, text: str) -> np.ndarray:
+    91→        w = cosine_similarity(self.word_vec.transform([text]), self.word_matrix)[0]
+    92→        c = cosine_similarity(self.char_vec.transform([text]), self.char_matrix)[0]
+    93→        return WORD_WEIGHT * w + CHAR_WEIGHT * c
+    94→
+    95→    def _batch_channels(self, texts: List[str], batch: int = 96) -> Tuple[np.ndarray, np.ndarray]:
+    96→        """Chunked batch similarity vs the full KB: combined + statement-only."""
+    97→        n = len(texts)
+    98→        out = np.zeros((n, len(self.kb)), dtype=np.float32)
+    99→        stmt_out = np.zeros((n, len(self.kb)), dtype=np.float32)
+   100→        for i in range(0, n, batch):
+   101→            chunk = texts[i:i + batch]
+   102→            wv = self.word_vec.transform(chunk)
+   103→            w = cosine_similarity(wv, self.word_matrix)
+   104→            c = cosine_similarity(self.char_vec.transform(chunk), self.char_matrix)
+   105→            out[i:i + batch] = WORD_WEIGHT * w + CHAR_WEIGHT * c
+   106→            stmt_out[i:i + batch] = cosine_similarity(wv, self.stmt_matrix)
+   107→        return out, stmt_out
+   108→
+   109→    def retrieve(self, text: str, k: int = taxonomy.TOP_K_EVIDENCE) -> List[RetrievedEvidence]:
+   110→        sims = self._combined_sims(text)
+   111→        stmt_sims = cosine_similarity(self.word_vec.transform([text]), self.stmt_matrix)[0]
+   112→        order = np.argsort(-sims)[:k]
+   113→        out = [RetrievedEvidence(self.kb[i], float(sims[i]), float(stmt_sims[i])) for i in order]
+   114→        if not any(e.is_duplicate for e in out):
+   115→            j = int(np.argmax(stmt_sims))
+   116→            if stmt_sims[j] >= DUPLICATE_STMT_SIM and all(e.record.kb_id != self.kb[j].kb_id for e in out):
+   117→                out.append(RetrievedEvidence(self.kb[j], float(sims[j]), float(stmt_sims[j])))
+   118→        return out
+   119→
+   120→    @staticmethod
+   121→    def _topk_from_row(sims_row: np.ndarray, stmt_row: np.ndarray, kb: List[KBRecord],
+   122→                       k: int = taxonomy.TOP_K_EVIDENCE) -> List[RetrievedEvidence]:
+   123→        idx = np.argpartition(-sims_row, min(k, len(sims_row) - 1))[:k]
+   124→        idx = idx[np.argsort(-sims_row[idx])]
+   125→        out = [RetrievedEvidence(kb[i], float(sims_row[i]), float(stmt_row[i]))
+   126→               for i in idx if sims_row[i] >= 0.0]
+   127→        if out and not any(e.is_duplicate for e in out):
+   128→            j = int(np.argmax(stmt_row))
+   129→            if stmt_row[j] >= DUPLICATE_STMT_SIM and j < len(kb) and all(e.record.kb_id != kb[j].kb_id for e in out):
+   130→                out.append(RetrievedEvidence(kb[j], float(sims_row[j]), float(stmt_row[j])))
+   131→        return out
+   132→
+   133→    # ─────────────────────────── scoring ───────────────────────────
+   134→
+   135→    def _assess_raw(self, evidence: List[RetrievedEvidence]) -> Dict:
+   136→        """Dominance-filtered weighted vote → class fractions + raw confidence.
+   137→
+   138→        Only evidence of comparable strength to the top match (≥ 50% of its
+   139→        similarity) participates: weak topic-level matches must not override a
+   140→        near-identical fact-check."""
+   141→        top_sim = evidence[0].similarity
+   142→        cut = 0.5 * top_sim
+   143→        voters = [e for e in evidence if e.similarity >= cut] or evidence[:1]
+   144→        weights = np.array([e.similarity ** 2 for e in voters])
+   145→        classes = [e.record.taxonomy_label for e in voters]
+   146→        directions = np.array([taxonomy.RATING_TO_DIRECTION[e.record.rating] for e in voters])
+   147→
+   148→        mass = {c: 0.0 for c in CLASSES}
+   149→        for w, c in zip(weights, classes):
+   150→            mass[c] += float(w)
+   151→        total = sum(mass.values()) or 1e-9
+   152→        p = {c: mass[c] / total for c in CLASSES}
+   153→        direction = float((weights * directions).sum() / max(weights.sum(), 1e-9))
+   154→
+   155→        strength = min(top_sim / WORD_SIM_CAP, 1.0)
+   156→        mult = EVIDENCE_STRENGTH_FLOOR + (1 - EVIDENCE_STRENGTH_FLOOR) * strength
+   157→        return {
+   158→            "p": p,
+   159→            "direction": direction,
+   160→            "top_sim": top_sim,
+   161→            "raw_conf": max(p.values()) * mult,
+   162→            "counts": {c: classes.count(c) for c in set(classes)},
+   163→        }
+   164→
+   165→    # ─────────────────────────── calibration & thresholds ───────────────────────────
+   166→
+   167→    def _fit_calibration(self) -> None:
+   168→        """Platt scaling fitted on validation (train-only retrieval, no leakage)."""
+   169→        valid = self.corpus["calibration_set"]
+   170→        self._valid_sims, self._valid_stmt_sims = self._batch_channels(
+   171→            [r.statement for r in valid])
+   172→        self._valid_sims[:, self.n_train:] = -1.0
+   173→        self._valid_stmt_sims[:, self.n_train:] = -1.0
+   174→
+   175→        raws, corrects = [], []
+   176→        for i, rec in enumerate(valid):
+   177→            ev = self._topk_from_row(self._valid_sims[i], self._valid_stmt_sims[i],
+   178→                                     self.kb[: self.n_train])
+   179→            if not ev or ev[0].similarity < taxonomy.EVIDENCE_SIMILARITY_FLOOR:
+   180→                continue
+   181→            if ev[0].is_duplicate:
+   182→                continue  # duplicates carry fixed 0.93 confidence, not model confidence
+   183→            raw = self._assess_raw(ev)
+   184→            pred = max(raw["p"], key=raw["p"].get)
+   185→            raws.append(raw["raw_conf"])
+   186→            corrects.append(1.0 if pred == rec.taxonomy_label else 0.0)
+   187→        self.cal_a, self.cal_b = fit_platt(np.array(raws), np.array(corrects))
+   188→        self.calibration_points = len(raws)
+   189→
+   190→    def _tune_safety_thresholds(self) -> None:
+   191→        """Asymmetric error cost (BRD §6.5 / gate 1): raise the Contradicted bar
+   192→        until the false-positive rate on true content is ≤ 2% on validation."""
+   193→        con_t = taxonomy.CONF_CONTRADICTED
+   194→        while con_t <= 0.95:
+   195→            fpr, judged = self._true_content_fpr(
+   196→                taxonomy.CONF_SUPPORTED, taxonomy.CONF_MISLEADING, con_t)
+   197→            if judged == 0 or fpr <= 0.02:
+   198→                break
+   199→            con_t += 0.05
+   200→        self.contradicted_threshold = round(min(con_t, 0.95), 2)
+   201→
+   202→        # validation calibration check (reported in the model card)
+   203→        confs, corrects = [], []
+   204→        for i, rec in enumerate(self.corpus["calibration_set"]):
+   205→            verdict = self._verdict_from_evidence(
+   206→                self._valid_evidence(i), taxonomy.CONF_SUPPORTED,
+   207→                taxonomy.CONF_MISLEADING, self.contradicted_threshold)
+   208→            if verdict["abstained"]:
+   209→                continue
+   210→            confs.append(verdict["confidence"])
+   211→            corrects.append(1.0 if verdict["label"] == rec.taxonomy_label else 0.0)
+   212→        self.valid_ece = round(expected_calibration_error(
+   213→            np.array(confs or [0.0]), np.array(corrects or [0.0])), 3)
+   214→        self.valid_calibration_points = len(confs)
+   215→
+   216→    def _true_content_fpr(self, sup_t: float, mis_t: float, con_t: float) -> Tuple[float, int]:
+   217→        judged = contradicted = 0
+   218→        for i, rec in enumerate(self.corpus["calibration_set"]):
+   219→            if rec.taxonomy_label != taxonomy.SUPPORTED:
+   220→                continue
+   221→            verdict = self._verdict_from_evidence(self._valid_evidence(i), sup_t, mis_t, con_t)
+   222→            if verdict["abstained"]:
+   223→                continue
+   224→            judged += 1
+   225→            if verdict["label"] == taxonomy.CONTRADICTED:
+   226→                contradicted += 1
+   227→        return (contradicted / judged if judged else 0.0), judged
+   228→
+   229→    def _valid_evidence(self, i: int) -> List[RetrievedEvidence]:
+   230→        return self._topk_from_row(self._valid_sims[i], self._valid_stmt_sims[i],
+   231→                                   self.kb[: self.n_train])
+   232→
+   233→    # ─────────────────────────── verdict logic ───────────────────────────
+   234→
+   235→    def _verdict_from_evidence(self, evidence: List[RetrievedEvidence],
+   236→                               sup_t: float, mis_t: float, con_t: float) -> Dict:
+   237→        """The safety-critical decision function. Style signals are NOT
+   238→        consulted (BR-07). Failing the class-specific bar ⇒ abstention."""
+   239→        if not evidence or evidence[0].similarity < taxonomy.EVIDENCE_SIMILARITY_FLOOR:
+   240→            best = evidence[0].similarity if evidence else 0.0
+   241→            return {
+   242→                "label": taxonomy.UNVERIFIED, "confidence": round(min(best, 1.0), 3),
+   243→                "abstained": True, "reason": "no_evidence",
+   244→                "detail": (
+   245→                    f"Best retrieved evidence matched only {best:.0%} of the claim — below our "
+   246→                    f"{taxonomy.EVIDENCE_SIMILARITY_FLOOR:.0%} citation floor, so no verdict can be "
+   247→                    f"responsibly issued (BR-05)."
+   248→                ),
+   249→            }
+   250→        # near-duplicate of a published fact-check ⇒ reuse the human verdict (BR-08)
+   251→        if evidence[0].is_duplicate:
+   252→            rec = evidence[0].record
+   253→            return {
+   254→                "label": rec.taxonomy_label, "confidence": 0.93,
+   255→                "abstained": False, "reason": "kb_duplicate",
+   256→                "detail": (
+   257→                    f"Essentially identical (statement match {evidence[0].statement_similarity:.0%}) to a "
+   258→                    f"published PolitiFact ruling rated '{taxonomy.RATING_DISPLAY[rec.rating]}' "
+   259→                    f"(speaker: {rec.speaker or 'unknown'}). We reuse the human fact-check rather than re-guessing."
+   260→                ),
+   261→            }
+   262→        raw = self._assess_raw(evidence)
+   263→        top_class = max(raw["p"], key=raw["p"].get)
+   264→        conf = apply_platt(raw["raw_conf"], self.cal_a, self.cal_b)
+   265→        thresholds = {taxonomy.SUPPORTED: sup_t, taxonomy.MISLEADING: mis_t,
+   266→                      taxonomy.CONTRADICTED: con_t}
+   267→        if conf < thresholds[top_class]:
+   268→            return {
+   269→                "label": taxonomy.UNVERIFIED, "confidence": round(conf, 3),
+   270→                "abstained": True, "reason": "low_confidence",
+   271→                "detail": (
+   272→                    f"Retrieved evidence leans '{top_class}' but calibrated confidence is only "
+   273→                    f"{conf:.0%} — below the {thresholds[top_class]:.0%} safety bar for that verdict. "
+   274→                    f"We abstain rather than guess (BR-05)."
+   275→                ),
+   276→            }
+   277→        return {
+   278→            "label": top_class, "confidence": round(conf, 3),
+   279→            "abstained": False, "reason": "evidence_supported", "detail": raw,
+   280→        }
+   281→
+   282→    # ─────────────────────────── explanation ───────────────────────────
+   283→
+   284→    def _explain(self, verdict: Dict, evidence: List[RetrievedEvidence], provisional: bool) -> str:
+   285→        """Plain-language explanation (BR-06): which claim, which evidence, why."""
+   286→        if verdict["abstained"]:
+   287→            return verdict["detail"]
+   288→        parts: List[str] = []
+   289→        if verdict["reason"] == "kb_duplicate":
+   290→            parts.append(verdict["detail"])
+   291→        else:
+   292→            d = verdict["detail"]
+   293→            counts = d.get("counts", {})
+   294→            top = evidence[0]
+   295→            rec = top.record
+   296→            parts.append(
+   297→                f"We matched this claim against {len(evidence)} fact-checks from our trusted-source "
+   298→                f"registry (PolitiFact)."
+   299→            )
+   300→            parts.append(
+   301→                f"{counts.get(taxonomy.SUPPORTED, 0)} retrieved fact-check(s) support it, "
+   302→                f"{counts.get(taxonomy.MISLEADING, 0)} rate similar claims half-true / missing context, "
+   303→                f"and {counts.get(taxonomy.CONTRADICTED, 0)} contradict it."
+   304→            )
+   305→            parts.append(
+   306→                f"The strongest match ({top.similarity:.0%} similar) is a statement by "
+   307→                f"{rec.speaker or 'a speaker'}"
+   308→                + (f" ({rec.speaker_job})" if rec.speaker_job else "")
+   309→                + f", rated '{taxonomy.RATING_DISPLAY[rec.rating]}' by PolitiFact"
+   310→                + (f" in {rec.context}" if rec.context else "")
+   311→                + "."
+   312→            )
+   313→            parts.append(
+   314→                f"Weighing the evidence by similarity strength, the assessment is "
+   315→                f"'{verdict['label']}' with calibrated confidence {verdict['confidence']:.0%}."
+   316→            )
+   317→        if provisional:
+   318→            parts.append(
+   319→                "This claim concerns a fast-moving subject (e.g. polls, economic figures). Evidence "
+   320→                "in the knowledge base is from the 2007–2016 window, so treat this assessment as "
+   321→                "provisional and prefer current official figures (BR-09)."
+   322→            )
+   323→        return " ".join(parts)
+   324→
+   325→    # ─────────────────────────── public API ───────────────────────────
+   326→
+   327→    def analyze(self, text: str, top_k: int = taxonomy.TOP_K_EVIDENCE) -> Dict:
+   328→        t0 = time.perf_counter()
+   329→        sanitized = sanitize(text)
+   330→        claims_out: List[Dict] = []
+   331→        high_impact_union = high_impact(sanitized.text)
+   332→
+   333→        extracted: List[ExtractedClaim] = extract_claims(sanitized.text)
+   334→        for claim in extracted:
+   335→            entry: Dict = {
+   336→                "position": claim.position,
+   337→                "text": claim.text,
+   338→                "claimType": claim.claim_type,
+   339→                "assessable": claim.assessable,
+   340→                "typeReason": claim.type_reason,
+   341→            }
+   342→            if not claim.assessable:
+   343→                entry["verdict"] = {
+   344→                    "label": taxonomy.NOT_ASSESSABLE, "confidence": None,
+   345→                    "abstained": False, "reason": "not_assessable",
+   346→                    "explanation": (
+   347→                        f"Marked '{claim.claim_type}' and therefore not assessable: {claim.type_reason} "
+   348→                        "Veritas only assesses factual claims (BR-02)."
+   349→                    ),
+   350→                    "provisional": False, "evidenceAgeDays": None,
+   351→                    "styleSignals": style_signals(claim.text),
+   352→                    "sourceReliability": None, "evidence": [],
+   353→                }
+   354→            else:
+   355→                evidence = self.retrieve(claim.text, top_k)
+   356→                verdict = self._verdict_from_evidence(
+   357→                    evidence, taxonomy.CONF_SUPPORTED, taxonomy.CONF_MISLEADING,
+   358→                    self.contradicted_threshold,
+   359→                )
+   360→                ts = time_sensitivity(claim.text)
+   361→                provisional = bool(ts["fastChangingSubject"] or ts["temporalMarkers"])
+   362→                evidence_payload = []
+   363→                if verdict["reason"] != "no_evidence":
+   364→                    for ev in evidence:
+   365→                        q = urllib.parse.quote(ev.record.statement[:90])
+   366→                        evidence_payload.append({
+   367→                            "rank": len(evidence_payload) + 1,
+   368→                            "title": f"PolitiFact ruling: {taxonomy.RATING_DISPLAY[ev.record.rating]}",
+   369→                            "url": f"https://www.politifact.com/search/?q={q}",
+   370→                            "excerpt": ev.record.statement,
+   371→                            "similarity": round(ev.similarity, 3),
+   372→                            "kbRating": ev.record.rating,
+   373→                            "speaker": ev.record.speaker,
+   374→                            "speakerJob": ev.record.speaker_job,
+   375→                            "context": ev.record.context,
+   376→                            "subject": ev.record.primary_subject,
+   377→                        })
+   378→                entry["verdict"] = {
+   379→                    "label": verdict["label"],
+   380→                    "confidence": verdict["confidence"],
+   381→                    "abstained": verdict["abstained"],
+   382→                    "reason": verdict["reason"],
+   383→                    "explanation": self._explain(verdict, evidence, provisional),
+   384→                    "provisional": provisional,
+   385→                    "timeSensitivity": ts,
+   386→                    "evidenceAgeDays": None,  # corpus has no per-record dates — honestly reported
+   387→                    "styleSignals": style_signals(claim.text),
+   388→                    "sourceReliability": 0.90,  # PolitiFact registry score (see Tier 1 registry)
+   389→                    "evidence": evidence_payload,
+   390→                }
+   391→            claim_hi = high_impact(claim.text)
+   392→            if claim_hi["flag"]:
+   393→                high_impact_union["flag"] = True
+   394→                high_impact_union["categories"] = sorted(set(high_impact_union["categories"]) | set(claim_hi["categories"]))
+   395→                high_impact_union["matchedTerms"] = sorted(set(high_impact_union["matchedTerms"]) | set(claim_hi["matchedTerms"]))
+   396→            claims_out.append(entry)
+   397→
+   398→        overall = self._rollup(claims_out)
+   399→        return {
+   400→            "modelVersion": taxonomy.MODEL_VERSION,
+   401→            "dataVersion": taxonomy.DATA_VERSION,
+   402→            "latencyMs": int((time.perf_counter() - t0) * 1000),
+   403→            "sanitization": {
+   404→                "flags": sanitized.flags,
+   405→                "originalLength": sanitized.original_length,
+   406→                "sanitizedLength": sanitized.sanitized_length,
+   407→            },
+   408→            "claims": claims_out,
+   409→            "highImpact": high_impact_union,
+   410→            "overall": overall,
+   411→        }
+   412→
+   413→    @staticmethod
+   414→    def _rollup(claims_out: List[Dict]) -> Dict:
+   415→        """Overall label by risk priority; the driving claim's confidence carries."""
+   416→        priority = [taxonomy.CONTRADICTED, taxonomy.MISLEADING, taxonomy.SUPPORTED]
+   417→        best: Optional[Dict] = None
+   418→        for entry in claims_out:
+   419→            v = entry.get("verdict", {})
+   420→            if v.get("abstained") or v.get("label") == taxonomy.NOT_ASSESSABLE:
+   421→                continue
+   422→            if v["label"] in priority:
+   423→                if best is None or priority.index(v["label"]) < priority.index(best["label"]):
+   424→                    best = v
+   425→        if best is None:
+   426→            if claims_out and all(c.get("verdict", {}).get("label") == taxonomy.NOT_ASSESSABLE for c in claims_out):
+   427→                return {"label": taxonomy.NOT_ASSESSABLE, "confidence": None}
+   428→            return {"label": taxonomy.UNVERIFIED, "confidence": 0.0}
+   429→        return {"label": best["label"], "confidence": best.get("confidence")}
+   430→
+   431→    def find_near_duplicate(self, text: str, candidates: List[Dict]) -> Optional[Dict]:
+   432→        """BR-08: reuse an existing human-verified verdict when a near-duplicate exists."""
+   433→        if not candidates:
+   434→            return None
+   435→        texts = [c.get("text", "") for c in candidates]
+   436→        try:
+   437→            mat = self.char_vec.transform([text] + texts)
+   438→            sims = cosine_similarity(mat[0:1], mat[1:])[0]
+   439→        except ValueError:
+   440→            return None
+   441→        if len(sims) == 0:
+   442→            return None
+   443→        i = int(np.argmax(sims))
+   444→        if sims[i] >= taxonomy.NEAR_DUPLICATE_SIM:
+   445→            out = dict(candidates[i])
+   446→            out["similarity"] = round(float(sims[i]), 3)
+   447→            return out
+   448→        return None
+   449→
+   450→    # ─────────────────────────── release gates (BRD §11) ───────────────────────────
+   451→
+   452→    def evaluate(self) -> Dict:
+   453→        if self._eval_cache is not None:
+   454→            return self._eval_cache
+   455→        t0 = time.perf_counter()
+   456→        test = self.corpus["frozen_test"]
+   457→        sims, stmt_sims = self._batch_channels([r.statement for r in test])
+   458→        sims[:, self.n_train:] = -1.0  # no leakage: train block only
+   459→        stmt_sims[:, self.n_train:] = -1.0
+   460→
+   461→        confs, corrects = [], []
+   462→        y_true, y_pred = [], []
+   463→        n_abstained = 0
+   464→        for i, rec in enumerate(test):
+   465→            evidence = self._topk_from_row(sims[i], stmt_sims[i], self.kb[: self.n_train])
+   466→            verdict = self._verdict_from_evidence(
+   467→                evidence, taxonomy.CONF_SUPPORTED, taxonomy.CONF_MISLEADING, self.contradicted_threshold)
+   468→            if verdict["abstained"]:
+   469→                n_abstained += 1
+   470→                continue
+   471→            y_true.append(rec.taxonomy_label)
+   472→            y_pred.append(verdict["label"])
+   473→            confs.append(verdict["confidence"])
+   474→            corrects.append(1.0 if verdict["label"] == rec.taxonomy_label else 0.0)
+   475→
+   476→        confs_arr = np.array(confs or [0.0])
+   477→        corr_arr = np.array(corrects or [0.0])
+   478→        accuracy = float(corr_arr.mean()) if len(corr_arr) else 0.0
+   479→
+   480→        def macro_f1(yt, yp):
+   481→            f1s = []
+   482→            for cls in CLASSES:
+   483→                tp = sum(1 for a, b in zip(yt, yp) if a == cls and b == cls)
+   484→                fp = sum(1 for a, b in zip(yt, yp) if a != cls and b == cls)
+   485→                fn = sum(1 for a, b in zip(yt, yp) if a == cls and b != cls)
+   486→                prec = tp / (tp + fp) if tp + fp else 0.0
+   487→                rec = tp / (tp + fn) if tp + fn else 0.0
+   488→                f1s.append(2 * prec * rec / (prec + rec) if prec + rec else 0.0)
+   489→            return float(np.mean(f1s)) if f1s else 0.0
+   490→
+   491→        true_idx = [i for i, y in enumerate(y_true) if y == taxonomy.SUPPORTED]
+   492→        fp_true = sum(1 for i in true_idx if y_pred[i] == taxonomy.CONTRADICTED)
+   493→        fpr_true = fp_true / len(true_idx) if true_idx else 0.0
+   494→        con_idx = [i for i, p in enumerate(y_pred) if p == taxonomy.CONTRADICTED]
+   495→        con_prec = (sum(1 for i in con_idx if y_true[i] == taxonomy.CONTRADICTED) / len(con_idx)) if con_idx else 1.0
+   496→        ece = expected_calibration_error(confs_arr, corr_arr)
+   497→        n_test = len(test)
+   498→
+   499→        self._eval_cache = {
+   500→            "evaluatedOn": "frozen test split (test.tsv — never used for training/tuning)",
+   501→            "nTest": n_test,
+   502→            "nJudged": len(y_true),
+   503→            "abstentionRate": round(n_abstained / n_test, 3),
+   504→            "accuracyNonAbstained": round(accuracy, 3),
+   505→            "macroF1NonAbstained": round(macro_f1(y_true, y_pred), 3),
+   506→            "contradictedPrecision": round(con_prec, 3),
+   507→            "falsePositiveRateOnTrueContent": round(fpr_true, 3),
+   508→            "eceNonAbstained": round(ece, 3),
+   509→            "latencySeconds": round(time.perf_counter() - t0, 1),
+   510→            "gates": {
+   511→                "fprTrueContentLe2pct": {"target": 0.02, "actual": round(fpr_true, 3)},
+   512→                "contradictedPrecisionGe95pct": {"target": 0.95, "actual": round(con_prec, 3)},
+   513→                "macroF1Ge085": {"target": 0.85, "actual": round(macro_f1(y_true, y_pred), 3)},
+   514→                "eceLe005": {"target": 0.05, "actual": round(ece, 3)},
+   515→            },
+   516→        }
+   517→        return self._eval_cache
+   518→
+   519→    def model_card(self) -> Dict:
+   520→        ratings: Dict[str, int] = {}
+   521→        for r in self.kb:
+   522→            ratings[r.rating] = ratings.get(r.rating, 0) + 1
+   523→        return {
+   524→            "modelVersion": taxonomy.MODEL_VERSION,
+   525→            "dataVersion": taxonomy.DATA_VERSION,
+   526→            "approach": "Retrieval-augmented verification: dual-channel TF-IDF retrieval over the "
+   527→                        "LIAR corpus of PolitiFact fact-checks; dominance-filtered weighted vote; "
+   528→                        "Platt-calibrated confidence; asymmetric abstention thresholds tuned on "
+   529→                        "validation for ≤2% false-positive rate on true content. Near-duplicates "
+   530→                        "reuse the published human verdict (BR-08).",
+   531→            "kbSize": len(self.kb),
+   532→            "kbRatings": ratings,
+   533→            "thresholds": {
+   534→                "evidenceSimilarityFloor": taxonomy.EVIDENCE_SIMILARITY_FLOOR,
+   535→                "confSupported": taxonomy.CONF_SUPPORTED,
+   536→                "confMisleading": taxonomy.CONF_MISLEADING,
+   537→                "confContradicted": self.contradicted_threshold,
+   538→                "nearDuplicateReuse": DUPLICATE_STMT_SIM,
+   539→            },
+   540→            "calibration": {
+   541→                "method": "Platt (2-parameter logistic) on validation split, train-only retrieval",
+   542→                "validationPoints": self.valid_calibration_points,
+   543→                "validationEce": self.valid_ece,
+   544→                "a": round(self.cal_a, 3),
+   545→                "b": round(self.cal_b, 3),
+   546→            },
+   547→            "startupSeconds": self.startup_seconds,
+   548→            "corpusChecksums": self.corpus["checksums"],
+   549→            "knownLimitations": [
+   550→                "US-politics-centric corpus (2007–2016); regional fairness gaps are surfaced, not hidden",
+   551→                "Short-claim corpus: long articles are decomposed into claims before retrieval",
+   552→                "PolitiFact rulings are human editorial judgments reused as trusted evidence",
+   553→                "No live web retrieval in v1 — evidence comes from the licensed KB snapshot",
+   554→                "By design the system abstains whenever evidence is weak; abstention rate is high "
+   555→                "on novel claims and that is the intended safe behaviour (BRD §6.2)",
+   556→            ],
+   557→            "safetyProperties": [
+   558→                "Graded taxonomy only — no binary fake/real output",
+   559→                "Evidence-first: no verdict without a cited source",
+   560→                "Style signals are display-only and never affect verdicts",
+   561→                "Asymmetric thresholds minimise wrongly labelling true content false",
+   562→                "Deterministic engine: same input, same output (auditable)",
+   563→            ],
+   564→        }
+   565→
+   566→    def suggestions(self, n: int = 6) -> List[Dict]:
+   567→        """Demo chips: (a) previously fact-checked statements from the TRAIN split
+   568→        exercising the BR-08 duplicate-reuse path, and (b) novel claims that
+   569→        honestly demonstrate abstention."""
+   570→        picks = [
+   571→            ("pants-fire", "fabricated"),
+   572→            ("false", "contradicts"),
+   573→            ("half-true", "mixed"),
+   574→            ("true", "supports"),
+   575→            ("mostly-true", "mostly supports"),
+   576→        ]
+   577→        out = []
+   578→        for rating, hint in picks:
+   579→            pool = [r for r in self.corpus["splits"]["train"]
+   580→                    if r.rating == rating and 60 < len(r.statement) < 160]
+   581→            if not pool:
+   582→                continue
+   583→            rec = pool[len(out) * 7 % len(pool)]  # deterministic spread
+   584→            out.append({
+   585→                "text": rec.statement,
+   586→                "speaker": rec.speaker,
+   587→                "trueRating": taxonomy.RATING_DISPLAY[rec.rating],
+   588→                "hint": hint,
+   589→                "subject": rec.primary_subject,
+   590→                "kind": "fact_checked",  # duplicate-reuse path
+   591→            })
+   592→        out.append({
+   593→            "text": "Zorblat Industries announced a quantum widget that reverses gravity.",
+   594→            "speaker": "Unknown",
+   595→            "trueRating": "Unknown",
+   596→            "hint": "abstains (no evidence)",
+   597→            "subject": "Technology",
+   598→            "kind": "novel",
+   599→        })
+   600→        return out[:n]
+   601→

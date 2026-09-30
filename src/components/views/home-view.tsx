@@ -267,7 +267,7 @@ export function HomeView() {
                 <Button
                   type="submit"
                   disabled={!text.trim() || analyzing}
-                  className="h-10 w-full gap-2.5 rounded-lg font-medium transition-transform active:scale-[0.98] sm:w-auto"
+                  className="veritas-cta-glow h-10 w-full gap-2.5 rounded-lg font-medium transition-all duration-200 active:scale-[0.98] sm:w-auto"
                 >
                   {analyzing ? (
                     <>

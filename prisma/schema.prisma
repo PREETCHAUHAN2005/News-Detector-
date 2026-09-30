@@ -106,6 +106,9 @@ model Evidence {
   kbRating  String
   speaker   String?
   context   String?
+  // JSON array of claim∩statement terms (engine TF-IDF vocabulary, idf-ranked) —
+  // explains WHY this evidence was retrieved (rendered as excerpt highlights)
+  highlights String?
 }
 
 // ─────────────────────────────── Governance ───────────────────────────────

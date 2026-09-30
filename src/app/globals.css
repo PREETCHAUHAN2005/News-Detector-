@@ -179,11 +179,59 @@ h1, h2 {
   transform: scale(0.985);
 }
 
+/* Skeleton shimmer — a soft gradient sweep layered over the standard pulse.
+   Applied to [data-slot=skeleton] globally (analytics/review/audit/appeals loaders). */
+@keyframes veritas-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+[data-slot="skeleton"] {
+  position: relative;
+  overflow: hidden;
+  background-image: linear-gradient(
+    90deg,
+    oklch(0.235 0.006 285.885) 25%,
+    oklch(0.29 0.008 285.885) 50%,
+    oklch(0.235 0.006 285.885) 75%
+  );
+  background-size: 200% 100%;
+  animation: veritas-shimmer 2s ease-in-out infinite;
+}
+
+/* Evidence claim-term highlights (BR-03) — graceful default even without
+   component classes; component-level styling remains authoritative. */
+mark {
+  background: oklch(0.796 0.135 166.113 / 16%);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* Primary CTA sheen — soft emerald glow under the "Verify with evidence" button */
+.veritas-cta-glow {
+  box-shadow:
+    0 0 0 1px oklch(0.796 0.135 166.113 / 25%),
+    0 4px 24px -6px oklch(0.796 0.135 166.113 / 35%);
+}
+.veritas-cta-glow:hover:not(:disabled) {
+  box-shadow:
+    0 0 0 1px oklch(0.796 0.135 166.113 / 40%),
+    0 6px 32px -6px oklch(0.796 0.135 166.113 / 50%);
+}
+.veritas-cta-glow:active:not(:disabled) {
+  box-shadow:
+    0 0 0 1px oklch(0.796 0.135 166.113 / 30%),
+    0 2px 12px -4px oklch(0.796 0.135 166.113 / 40%);
+}
+
 /* Respect OS-level motion preferences: keep entrances static but visible */
 @media (prefers-reduced-motion: reduce) {
   .veritas-pulse,
   .veritas-pop {
     animation: none;
+  }
+  [data-slot="skeleton"] {
+    animation: veritas-pulse 2.4s ease-in-out infinite;
   }
   *,
   ::before,

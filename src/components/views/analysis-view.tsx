@@ -473,7 +473,7 @@ function ClaimCard({
             {verdict?.evidence.length ?? 0}
           </span>
         </h3>
-        <EvidenceList evidence={verdict?.evidence ?? []} />
+        <EvidenceList evidence={verdict?.evidence ?? []} claimText={claim.text} />
       </section>
 
       {/* divider: evidence above, model recommendation below */}

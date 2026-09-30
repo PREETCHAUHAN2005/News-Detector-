@@ -12,7 +12,7 @@ export function StatusBar() {
   const view = useAppStore((s) => s.view);
   const [clock, setClock] = useState("");
 
-  const { data: health } = useQuery({
+  const { data: health, isPending } = useQuery({
     queryKey: ["health"],
     queryFn: fetchHealth,
     refetchInterval: 30_000,
@@ -29,6 +29,8 @@ export function StatusBar() {
 
   const engineOk = health?.nlpEngine === "ok";
   const dbOk = health?.database === "ok";
+  // While the first health probe is in flight we render a neutral "checking…"
+  // state — never a false "offline" alarm (fail-safe only after a real answer).
 
   return (
     <footer
@@ -36,16 +38,30 @@ export function StatusBar() {
       role="contentinfo"
     >
       <div className="flex min-w-0 flex-1 items-center gap-4">
-        <span className="flex shrink-0 items-center gap-1.5" title="NLP engine status">
+        <span className="flex shrink-0 items-center gap-1.5" title={isPending ? "Checking NLP engine status…" : "NLP engine status"}>
           <Radio
-            className={`size-3 ${engineOk ? "text-emerald-400 veritas-pulse" : "text-rose-400"}`}
+            className={`size-3 ${
+              isPending
+                ? "animate-pulse text-zinc-500"
+                : engineOk
+                  ? "text-emerald-400 veritas-pulse"
+                  : "text-rose-400"
+            }`}
             aria-hidden
           />
-          <span className="hidden sm:inline">Engine {engineOk ? "online" : "offline (fail-safe)"}</span>
+          <span className="hidden sm:inline">
+            {isPending ? "Engine checking…" : engineOk ? "Engine online" : "Engine offline (fail-safe)"}
+          </span>
         </span>
-        <span className="hidden shrink-0 items-center gap-1.5 sm:flex" title="Database status">
-          <Database className={`size-3 ${dbOk ? "text-emerald-400" : "text-rose-400"}`} aria-hidden />
-          DB {dbOk ? "ok" : "down"}
+        <span
+          className="hidden shrink-0 items-center gap-1.5 sm:flex"
+          title={isPending ? "Checking database status…" : "Database status"}
+        >
+          <Database
+            className={`size-3 ${isPending ? "animate-pulse text-zinc-500" : dbOk ? "text-emerald-400" : "text-rose-400"}`}
+            aria-hidden
+          />
+          {isPending ? "DB checking…" : `DB ${dbOk ? "ok" : "down"}`}
         </span>
         <span className="hidden shrink-0 items-center gap-1.5 lg:flex" title="Current view">
           <Activity className="size-3 text-zinc-400" aria-hidden />

@@ -22,8 +22,10 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import {
   AlertTriangle,
+  ArrowUpRight,
   BookOpenCheck,
   Clock,
+  Download,
   FileSearch,
   Gauge,
   HelpCircle,
@@ -56,10 +58,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { fetchAnalyses, fetchAnalytics } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { ALL_LABELS, LABEL_META, TAXONOMY } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import type { AnalysisDTO } from "@/types/api";
+import { useToast } from "@/hooks/use-toast";
+import type { AnalysisDTO, AnalyticsDTO } from "@/types/api";
 import { StatusBadge, VerdictBadge } from "@/components/verdict/verdict-badge";
 
 /** Hex palette mirroring LABEL_META (no blue/purple). */
@@ -213,6 +217,8 @@ function KpiTile({
   delta,
   sparkline,
   days,
+  onDrill,
+  drillHint,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: string;
@@ -222,6 +228,9 @@ function KpiTile({
   delta?: KpiDelta;
   sparkline?: number[];
   days?: number;
+  /** drill-down action — renders an affordance button on the tile */
+  onDrill?: () => void;
+  drillHint?: string;
 }) {
   const tipWithPrev =
     tip && delta ? `${tip} · previous ${days}d: ${delta.previous.toLocaleString()}` : tip;
@@ -230,17 +239,30 @@ function KpiTile({
       <CardContent className="p-4">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
           <Icon className={`size-3.5 shrink-0 ${accent}`} aria-hidden />
-          <span className="truncate">{label}</span>
-          {tipWithPrev ? (
-            <UiTooltip>
-              <TooltipTrigger asChild>
-                <HelpCircle className="ml-auto size-3 shrink-0 cursor-help text-zinc-600 hover:text-zinc-400" aria-label={tipWithPrev} />
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-52 text-xs">
-                {tipWithPrev}
-              </TooltipContent>
-            </UiTooltip>
-          ) : null}
+          <span className="leading-tight">{label}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {onDrill && (
+              <button
+                type="button"
+                onClick={onDrill}
+                title={drillHint ?? "Drill down"}
+                aria-label={`${drillHint ?? `Open ${label} details`}`}
+                className="rounded p-0.5 text-zinc-600 opacity-100 transition-all hover:bg-zinc-800 hover:text-emerald-400 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50 sm:opacity-0 sm:group-hover:opacity-100"
+              >
+                <ArrowUpRight className="size-3.5" aria-hidden />
+              </button>
+            )}
+            {tipWithPrev ? (
+              <UiTooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="size-3 cursor-help text-zinc-600 hover:text-zinc-400" aria-label={tipWithPrev} />
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-52 text-xs">
+                  {tipWithPrev}
+                </TooltipContent>
+              </UiTooltip>
+            ) : null}
+          </span>
         </div>
         <div className="mt-2 flex items-end justify-between gap-2">
           <div className="min-w-0">
@@ -294,10 +316,19 @@ function ChartTooltip({
 
 /* ───────────────────────────── view ───────────────────────────── */
 
+/** Smooth-scroll to an in-page KPI drill target section. */
+function scrollToSection(id: string): () => void {
+  return () => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+}
+
 export function AnalyticsView() {
   const [days, setDays] = useState<RangeDays>(7);
   /** fairness drill-down (BR-17): topic opened from the chart */
   const [drillTopic, setDrillTopic] = useState<string | null>(null);
+  const setView = useAppStore((s) => s.setView);
+  const { toast } = useToast();
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["analytics", days],
     queryFn: () => fetchAnalytics(days),
@@ -372,6 +403,66 @@ export function AnalyticsView() {
   const trends = data.trends;
   const sparkline = data.sparkline ?? [];
 
+  /** Long-format CSV export of the current window's metrics (BR-16/17 ops data). */
+  function exportCsv(snapshot: AnalyticsDTO): void {
+    try {
+      const rows: Array<Array<string | number>> = [["section", "metric", "value", "detail"]];
+      const push = (section: string, metric: string, value: string | number, detail = "") =>
+        rows.push([section, metric, value, detail]);
+      push("overview", "generated_at", new Date().toISOString());
+      push("overview", "window_days", days);
+      push("overview", "analyses_total", snapshot.totals.analyses);
+      push("overview", "reviews_total", snapshot.totals.reviews);
+      push("overview", "appeals_total", snapshot.totals.appeals);
+      push("overview", "reviewers_total", snapshot.totals.reviewers);
+      push("overview", "abstention_rate", snapshot.abstentionRate.toFixed(4));
+      push("overview", "override_rate", snapshot.overrideRate.toFixed(4));
+      push("overview", "latency_p50_ms", snapshot.latency.p50);
+      push("overview", "latency_p95_ms", snapshot.latency.p95);
+      push("overview", "latency_samples", snapshot.latency.samples);
+      push(
+        "overview",
+        "appeal_median_resolution_hours",
+        snapshot.appealMedianResolutionHours ?? "n/a"
+      );
+      for (const [label, count] of Object.entries(snapshot.verdictMix)) {
+        push("verdict_mix", label, count);
+      }
+      for (const [status, count] of Object.entries(snapshot.statusMix)) {
+        push("status_mix", status, count);
+      }
+      for (const [action, count] of Object.entries(snapshot.reviewActions)) {
+        push("review_actions", action, count);
+      }
+      for (const [state, count] of Object.entries(snapshot.appealMix)) {
+        push("appeal_mix", state, count);
+      }
+      for (const d of snapshot.dailyVolume) {
+        push("daily_volume", d.date, d.total, `contradicted=${d.contradicted}`);
+      }
+      for (const t of snapshot.fairnessByTopic) {
+        push(
+          "fairness_by_topic",
+          t.topic,
+          t.contradictedShare.toFixed(4),
+          `total=${t.total}`
+        );
+      }
+      const stamp = format(new Date(), "yyyyMMdd-HHmm");
+      downloadCsv(`veritas-analytics-${days}d-${stamp}.csv`, rows);
+      toast({
+        title: "Analytics exported",
+        description: `${rows.length - 1} metrics as CSV (last ${days} days).`,
+      });
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description: "The analytics snapshot could not be exported right now.",
+      });
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
       {/* header + range selector */}
@@ -382,11 +473,22 @@ export function AnalyticsView() {
             Volume, verdict mix, abstention, overrides, latency and fairness (BR-16/17).
           </p>
         </div>
-        <div
-          role="group"
-          aria-label="Date range"
-          className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1"
-        >
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => exportCsv(data)}
+            title="Download the current window's metrics as CSV"
+            className="h-8 gap-1.5 border-zinc-800 bg-zinc-900/70 text-xs text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+          >
+            <Download className="size-3.5" aria-hidden />
+            Export CSV
+          </Button>
+          <div
+            role="group"
+            aria-label="Date range"
+            className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1"
+          >
           {RANGE_OPTIONS.map((option) => (
             <button
               key={option}
@@ -410,6 +512,7 @@ export function AnalyticsView() {
               {option}d
             </button>
           ))}
+          </div>
         </div>
       </header>
 
@@ -428,6 +531,8 @@ export function AnalyticsView() {
               ? `${rangeAnalyses.toLocaleString()} in the last ${days} days`
               : undefined
           }
+          onDrill={() => setView("review")}
+          drillHint="Open the review queue — every analysis with its filters"
         />
         <KpiTile
           icon={BookOpenCheck}
@@ -441,12 +546,16 @@ export function AnalyticsView() {
               ? `${rangeReviews.toLocaleString()} in the last ${days} days`
               : undefined
           }
+          onDrill={scrollToSection("kpi-drill-review-actions")}
+          drillHint="Show the review-actions breakdown"
         />
         <KpiTile
           icon={ScrollText}
           value={data.totals.appeals.toLocaleString()}
           label="Appeals"
           accent="text-amber-400/80"
+          onDrill={() => setView("appeals")}
+          drillHint="Open the appeals workflow"
         />
         <KpiTile
           icon={HelpCircle}
@@ -456,6 +565,8 @@ export function AnalyticsView() {
           days={days}
           delta={trends?.abstention ? { ...trends.abstention, kind: "rate", good: "none" } : undefined}
           tip="Share of analyses the system responsibly abstained on"
+          onDrill={scrollToSection("kpi-drill-verdict-mix")}
+          drillHint="Show the verdict mix — abstained items are Unverified"
         />
         <KpiTile
           icon={Gauge}
@@ -465,6 +576,8 @@ export function AnalyticsView() {
           days={days}
           delta={trends?.override ? { ...trends.override, kind: "rate", good: "down" } : undefined}
           tip="Reviews where the human changed the model's recommendation"
+          onDrill={scrollToSection("kpi-drill-review-actions")}
+          drillHint="Show accept / edit / reject review actions"
         />
         <KpiTile
           icon={Gauge}
@@ -473,11 +586,17 @@ export function AnalyticsView() {
           accent="text-emerald-400/80"
           days={days}
           delta={trends?.latencyP95 ? { ...trends.latencyP95, kind: "ms", good: "down" } : undefined}
+          onDrill={() => setView("model-card")}
+          drillHint="Open the model card — engine performance metrics"
         />
       </section>
 
       {/* charts row 1 */}
-      <section aria-label="Verdict mix and daily volume" className="mt-4 grid gap-4 lg:grid-cols-2">
+      <section
+        id="kpi-drill-verdict-mix"
+        aria-label="Verdict mix and daily volume"
+        className="mt-6 scroll-mt-20 grid gap-4 lg:grid-cols-2"
+      >
         <Card className="border-zinc-800 bg-zinc-900/40">
           <CardHeader className="p-4 pb-0">
             <CardTitle className="text-sm font-medium text-zinc-200">Verdict mix</CardTitle>
@@ -589,7 +708,7 @@ export function AnalyticsView() {
                       />
                     )}
                   />
-                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" fillOpacity={0.55} radius={[3, 3, 0, 0]} maxBarSize={26} />
+                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" fillOpacity={0.4} radius={[3, 3, 0, 0]} maxBarSize={26} />
                   <Bar dataKey="contradicted" name="Contradicted" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[3, 3, 0, 0]} maxBarSize={26} />
                 </BarChart>
               </ResponsiveContainer>
@@ -599,7 +718,11 @@ export function AnalyticsView() {
       </section>
 
       {/* charts row 2 */}
-      <section aria-label="Review actions and fairness by topic" className="mt-4 grid gap-4 lg:grid-cols-2">
+      <section
+        id="kpi-drill-review-actions"
+        aria-label="Review actions and fairness by topic"
+        className="mt-6 scroll-mt-20 grid gap-4 lg:grid-cols-2"
+      >
         <Card className="border-zinc-800 bg-zinc-900/40">
           <CardHeader className="p-4 pb-0">
             <CardTitle className="text-sm font-medium text-zinc-200">Review actions</CardTitle>

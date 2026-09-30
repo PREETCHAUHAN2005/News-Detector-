@@ -45,6 +45,7 @@ const SECTIONS: { title: string; rows: ShortcutRow[] }[] = [
     rows: [
       { keys: ["↑", "↓"], description: "Move the selection" },
       { keys: ["↵"], description: "Open the selected view, analysis or action" },
+      { keys: ["abc…"], description: "Type 3+ characters to live-search the full analysis history" },
     ],
   },
   {

@@ -19,6 +19,8 @@ export interface EngineEvidence {
   speakerJob?: string;
   context?: string;
   subject?: string;
+  /** claim∩statement terms from the engine's TF-IDF vocabulary (idf-ranked) */
+  highlights?: string[];
 }
 
 export interface EngineVerdict {

@@ -222,6 +222,8 @@ export async function POST(req: Request) {
                         kbRating: e.kbRating,
                         speaker: e.speaker ?? null,
                         context: e.context ?? null,
+                        // engine-computed claim∩statement terms (TF-IDF vocabulary)
+                        highlights: e.highlights?.length ? JSON.stringify(e.highlights) : null,
                       })),
                     },
                   },

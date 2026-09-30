@@ -259,3 +259,53 @@ Stage Summary:
 - All BRD safety properties re-verified intact (evidence-first ordering, abstention on novel claims, BR-08 reuse Contradicted 93%, human-review gates untouched).
 - Services: Next 3000 + engine 8001 + watchdog all healthy.
 - Unresolved / next-phase candidates: (1) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design per BRD §14); (2) i18n + live web retrieval remain Phase 4; (3) possible future UX: palette mid-typing recents refresh, dossier metadata as icon-pills (VLM suggestion, deferred — mono row is a deliberate design), analytics KPI tile links to drill views; (4) watchdog + dev server still die on full sandbox restart — re-run `setsid bun run scripts/engine-watchdog.ts >> mini-services/nlp-engine/watchdog.log 2>&1 &` and restart dev server if that happens.
+
+---
+Task ID: 14 (in progress)
+Agent: Main (Z.ai Code)
+Task: Round 6 — regression QA + bug fixes (pending-state false "engine offline") + ops hardening
+
+Work Log:
+- Status assessment: all services healthy (Next 3000, engine 8001, watchdog; engine auto-recovered once via watchdog at 22:11).
+- agent-browser regression QA (fresh session qa6): signin → home → analyze novel claim (Riverton city council → correct abstention → Unverified, 5 evidence cards, model rec 35% ABSTAINED) → dossier (evidence-first intact) → all 9 views via g-keys → review-queue j/k + Enter triage → mobile 390×844 (no overflow, footer bottom=vh) → 0 console/page errors.
+- BUG 1 found+fixed (status-bar.tsx): health query PENDING state rendered "Engine offline (fail-safe)" + rose icon on every initial load — false alarm. Now: neutral "Engine checking…" (zinc pulse icon) while isPending, online/offline only after real answer. DB chip same treatment.
+- BUG 2 found+fixed (app-topbar.tsx): model-card query pending/pre-auth rendered amber "engine offline" badge — false alarm on signin screen. Now three-state: cardError → amber "engine offline"; authenticated+pending → "engine…" spinner; signed-out → neutral quiet "veritas-nlp" chip (no perpetual spinner: disabled queries stay isPending forever).
+- OPS INCIDENT: dev server died repeatedly. Root-caused in two waves: (1) kernel OOM at 12947s (bunx tsc + chrome concurrent — same class as Task 12 incident); (2) cgroup v1 /sys/fs/cgroup/memory/memory.oom_control shows oom_kill 3 — cgroup limit 4GB; chrome spawn + Turbopack compile spikes kill next-server silently (no dmesg trace for cgroup OOMs). Mitigation: scripts/dev-up.sh — restart detached + curl-warm all routes + health-verify with retries; keep browser session alive (chrome respawns are the deadly fork spikes); memory discipline (close browser before lint/tsc).
+- QA screenshots: docs/qa/qa6-00…qa6-06-*.png.
+
+Stage Summary (partial):
+- 2 bugs fixed (pending-state false alarms in topbar + status bar). Regression QA otherwise clean: abstention, evidence-first, BR-08 reuse, all views, mobile, 0 console errors.
+- Dev-server stability protocol established (scripts/dev-up.sh) — re-run it whenever port 3000 dies.
+- Next: features (evidence claim-term highlighting in engine, KPI drill links, palette recents refresh, analytics CSV export) + styling polish.
+
+---
+Task ID: 14 (completion)
+Agent: Main (Z.ai Code)
+Task: Round 6 — features (engine TF-IDF evidence highlights, KPI drills, palette live search, analytics CSV) + VLM styling polish + final QA
+
+Work Log:
+- FEATURE A — Evidence claim-term highlighting (engine → DB → API → UI, the round's flagship NLP feature):
+  * Engine (app/engine.py): new matched_terms(claim, statement) — shared terms drawn from the PRODUCTION word-vectorizer vocabulary, ranked by IDF, word-overlap deduped (bigrams beat subsumed unigrams, non-overlapping highlight coverage); attached as "highlights" on every evidence payload. Two engine bugs found+fixed during bring-up: inverse-vocabulary lookup (KeyError np.int32 degraded the whole analyze call) and subsumption logic (kept whole bigram strings instead of their words → 'care' unigram leaked alongside 'affordable care').
+  * Prisma: Evidence.highlights String? (JSON array) — additive column, db:push applied, dev server restarted to load the new client (stale client caused a transient 500 "Unknown argument sourceId" on /api/analyze).
+  * analyze route: persists JSON.stringify(engine highlights); BR-08 reuse path intentionally leaves null (render-time fallback computes terms for the CURRENT claim).
+  * src/lib/highlight.ts: normalizeHighlights (JSON-string|array), sharedTerms (stopword-filtered lexical fallback for legacy rows), effectiveHighlightTerms (stored engine terms preferred), segmentHighlighted (regex longest-first splitting, zero-length-match guard).
+  * UI (evidence-list.tsx): <mark> segments (emerald bg /15, hover → /30 + emerald-100, cursor-help, title tooltip), "N matched claim terms · engine TF-IDF match / lexical overlap" chip per card; EvidenceList gains claimText prop (dossier passes claim.text); report.ts export includes `Matched claim terms: \`t1\`, \`t2\`` per evidence.
+  * Verified E2E: "Affordable Care Act death panels" analysis → 13 marks across evidence cards, terms ['affordable care', 'act'] etc., fallback path exercised on legacy dossiers.
+- FEATURE B — KPI drill-down links: KpiTile gains onDrill/drillHint → ArrowUpRight affordance button (touch-visible via opacity-100 sm:opacity-0 sm:group-hover:opacity-100; valid HTML — dedicated button, no nested-button card). Analyses→review queue; Reviews & Override→in-page smooth scroll (#kpi-drill-review-actions, scroll-mt-20); Abstention→verdict-mix section; Appeals→appeals view; Latency→model-card. Both drill types browser-verified (view switch + scrollIntoView).
+- FEATURE C — Palette live full-history search (subsumes "mid-typing recents refresh"): ≥3 chars switches from the 8 cached recents to server search (fetchAnalyses q=, placeholderData keeps previous results), footer shows "searching full history" w/ spinner→Search icon. Shortcuts help documents "abc…". Verified: "coffee" → 2 historical matches incl. a backfilled one.
+- FEATURE D — Analytics CSV export (BR-13/16/17): new shared src/lib/csv.ts (RFC-4180 + download); analytics header "Export CSV" button → long-format section/metric/value/detail rows (overview KPIs incl. trends window, verdict/status/review-actions/appeal mixes, daily volume, fairness-by-topic) → veritas-analytics-{N}d-{stamp}.csv + toast. Verified: file downloaded with 60 rows of correct data.
+- STYLING POLISH (VLM-reviewed, 2 review cycles):
+  * globals.css: skeleton shimmer (gradient sweep on [data-slot=skeleton], reduced-motion fallback to pulse), global mark styling baseline, .veritas-cta-glow (emerald glow states for the submit button, applied to "Verify with evidence").
+  * VLM round 1 (dossier 7.5/10): implemented highlight hover interaction (brighten + cursor-help); metadata-row and serif/sans mix kept as deliberate design (documented in Task 13).
+  * VLM round 2 (analytics 6.5→8.5/10): KPI label wrap fix (truncate→leading-tight; "Override rate" WAS really clipping — verified via scrollWidth), chart-row spacing mt-4→mt-6, base bar fillOpacity 0.55→0.4 (contradicted overlay pops), sidebar recents get title=full-text on hover.
+  * Review queue empty state: emerald Inbox medallion + motion entrance + explanatory copy.
+  * Evidence card Quote icon emerald-tinted (-translate-y-px).
+- Final QA (fresh session): signin → all 6 g-key views → j/k+Enter triage opens dossier (13 marks) → 0 page errors → 0 console errors/warnings → mobile 390×844 no overflow → lint clean → scoped tsc clean.
+- QA screenshots: docs/qa/qa6-00…qa6-16-*.png.
+
+Stage Summary:
+- 2 bugs fixed (pending-state false "engine offline" in topbar + status bar; plus 2 engine bring-up bugs during Feature A); 4 new features (evidence TF-IDF highlights w/ report integration, KPI drill links, palette live search, analytics CSV export); styling polish incl. VLM-feedback loop (analytics 6.5→8.5/10); ops hardening (scripts/dev-up.sh restart protocol).
+- All BRD safety properties re-verified intact (abstention on novel claims, evidence-first ordering, BR-08 reuse, human-review gates, 0 console errors).
+- Services: Next 3000 (dev-up.sh protocol) + engine 8001 (watchdog, hot-reload verified) all healthy.
+- Demo accounts: reviewer/senior/admin/viewer @veritas.io / veritas123.
+- Unresolved / next-phase candidates: (1) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design per BRD §14); (2) i18n + live web retrieval remain Phase 4; (3) future UX: VLM's "hover tooltip with TF-IDF score on highlighted terms" (needs per-term weight exposure from engine), analytics KPI tiles could deep-link with pre-applied filters (needs cross-view filter state in store); (4) sandbox memory discipline remains mandatory — chrome spawn + Turbopack compile spikes can still OOM-kill the dev server in the 4GB cgroup: run `bash scripts/dev-up.sh` and keep ONE browser session alive instead of respawning chrome; close the browser before lint/tsc.

@@ -2,10 +2,13 @@
 /** Cited evidence list (BR-03): retrieved fact-checks with similarity,
     rating and source link. Rendered BEFORE the model verdict in the
     analysis view (anti-automation-bias, BRD §12). Each card cross-references
-    the trusted-source registry to show the evidence domain's reliability. */
-import { useState } from "react";
-import { BadgeCheck, Check, Copy, ExternalLink, Quote, ShieldCheck, UserRound } from "lucide-react";
+    the trusted-source registry to show the evidence domain's reliability.
+    Excerpts highlight the claim terms that drove retrieval (engine TF-IDF
+    vocabulary; lexical fallback for legacy rows) — evidence-first, explained. */
+import { useMemo, useState } from "react";
+import { BadgeCheck, Check, Copy, ExternalLink, Highlighter, Quote, ShieldCheck, UserRound } from "lucide-react";
 import type { EvidenceDTO } from "@/types/api";
+import { effectiveHighlightTerms, normalizeHighlights, segmentHighlighted } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
 const RATING_STYLE: Record<string, string> = {
@@ -86,12 +89,25 @@ function SourceChip({ source }: { source: NonNullable<EvidenceDTO["source"]> }) 
 
 export function EvidenceCard({
   evidence,
+  claimText,
   compact = false,
 }: {
   evidence: EvidenceDTO;
+  /** current claim text — enables the lexical fallback + makes highlights verifiable */
+  claimText?: string;
   compact?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+
+  const highlightTerms = useMemo(
+    () => (claimText ? effectiveHighlightTerms(evidence.highlights, claimText, evidence.excerpt) : []),
+    [evidence.highlights, evidence.excerpt, claimText]
+  );
+  const excerptSegments = useMemo(
+    () => segmentHighlighted(evidence.excerpt, highlightTerms),
+    [evidence.excerpt, highlightTerms]
+  );
+  const usedStored = highlightTerms.length > 0 && normalizeHighlights(evidence.highlights).length > 0;
 
   async function copyCitation(event: React.MouseEvent<HTMLButtonElement>): Promise<void> {
     // the card itself is a link — keep the click on the button local
@@ -179,9 +195,34 @@ export function EvidenceCard({
         />
       </div>
       <p className={cn("text-[13px] leading-relaxed text-zinc-200", compact && "line-clamp-2 text-xs")}>
-        <Quote className="mr-1 inline size-3 text-zinc-600" aria-hidden />
-        {evidence.excerpt}
+        <Quote className="mr-1.5 inline size-3 -translate-y-px text-emerald-400/50" aria-hidden />
+        {excerptSegments.map((seg, i) =>
+          seg.match ? (
+            <mark
+              key={i}
+              title="Claim term that drove this retrieval (TF-IDF match)"
+              className="cursor-help rounded-[3px] bg-emerald-500/15 px-0.5 font-medium text-emerald-200 underline-offset-2 transition-colors hover:bg-emerald-500/30 hover:text-emerald-100"
+            >
+              {seg.text}
+            </mark>
+          ) : (
+            <span key={i}>{seg.text}</span>
+          )
+        )}
       </p>
+      {highlightTerms.length > 0 && !compact && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-zinc-500">
+          <Highlighter className="size-3 shrink-0 text-emerald-400/70" aria-hidden />
+          <span className="truncate">
+            {highlightTerms.length} matched claim {highlightTerms.length === 1 ? "term" : "terms"}
+            <span className="text-zinc-600">
+              {" "}
+              ·{" "}
+              {usedStored ? "engine TF-IDF match" : "lexical overlap"}
+            </span>
+          </span>
+        </p>
+      )}
       {(evidence.speaker || evidence.context) && !compact && (
         <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
           {evidence.speaker && (
@@ -211,9 +252,11 @@ export function EvidenceCard({
 
 export function EvidenceList({
   evidence,
+  claimText,
   compact = false,
 }: {
   evidence: EvidenceDTO[];
+  claimText?: string;
   compact?: boolean;
 }) {
   if (evidence.length === 0) {
@@ -227,11 +270,12 @@ export function EvidenceList({
   return (
     <div className="space-y-2.5">
       {evidence.map((e) => (
-        <EvidenceCard key={e.id ?? e.rank} evidence={e} compact={compact} />
+        <EvidenceCard key={e.id ?? e.rank} evidence={e} claimText={claimText} compact={compact} />
       ))}
       <p className="text-[11px] text-zinc-600">
         Sources: trusted-source registry (PolitiFact via LIAR corpus). Similarity is TF-IDF
-        cosine across word + character channels.
+        cosine across word + character channels. Highlighted terms are claim∩statement
+        vocabulary matches that drove retrieval.
       </p>
     </div>
   );
