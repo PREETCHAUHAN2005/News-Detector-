@@ -3,6 +3,7 @@
  * Operations analytics (BR-16/17) — volume, verdict mix, abstention,
  * overrides, latency percentiles and fairness-by-topic surfacing.
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
@@ -45,6 +46,7 @@ import {
 } from "@/components/ui/tooltip";
 import { fetchAnalytics } from "@/lib/api";
 import { ALL_LABELS, LABEL_META, TAXONOMY } from "@/lib/taxonomy";
+import { cn } from "@/lib/utils";
 
 /** Hex palette mirroring LABEL_META (no blue/purple). */
 const LABEL_HEX: Record<string, string> = {
@@ -65,6 +67,32 @@ function fmtPercent(x: number, digits = 1): string {
   return `${(x * 100).toFixed(digits)}%`;
 }
 
+/** Allowed date-range windows (mirrors the API). */
+const RANGE_OPTIONS = [7, 30, 90] as const;
+type RangeDays = (typeof RANGE_OPTIONS)[number];
+
+/** Aggregate daily rows into weekly buckets for the wider windows. */
+function bucketWeekly(
+  daily: { date: string; total: number; contradicted: number }[]
+): { date: string; total: number; contradicted: number }[] {
+  const weeks = new Map<string, { total: number; contradicted: number }>();
+  for (const day of daily) {
+    const d = new Date(`${day.date}T00:00:00`);
+    // Monday-based week start
+    const weekday = (d.getDay() + 6) % 7;
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - weekday);
+    const key = monday.toISOString().slice(0, 10);
+    const entry = weeks.get(key) ?? { total: 0, contradicted: 0 };
+    entry.total += day.total;
+    entry.contradicted += day.contradicted;
+    weeks.set(key, entry);
+  }
+  return Array.from(weeks.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, v]) => ({ date, ...v }));
+}
+
 /* ───────────────────────────── KPI tile ───────────────────────────── */
 
 function KpiTile({
@@ -72,17 +100,19 @@ function KpiTile({
   value,
   label,
   tip,
+  accent = "text-zinc-500",
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: string;
   label: string;
   tip?: string;
+  accent?: string;
 }) {
   return (
-    <Card className="border-zinc-800 bg-zinc-900/40">
+    <Card className="group border-zinc-800 bg-zinc-900/40 transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-700 hover:shadow-lg hover:shadow-black/20">
       <CardContent className="p-4">
         <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-500">
-          <Icon className="size-3.5 shrink-0" aria-hidden />
+          <Icon className={`size-3.5 shrink-0 ${accent}`} aria-hidden />
           <span className="truncate">{label}</span>
           {tip ? (
             <UiTooltip>
@@ -140,9 +170,10 @@ function ChartTooltip({
 /* ───────────────────────────── view ───────────────────────────── */
 
 export function AnalyticsView() {
+  const [days, setDays] = useState<RangeDays>(7);
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["analytics"],
-    queryFn: fetchAnalytics,
+    queryKey: ["analytics", days],
+    queryFn: () => fetchAnalytics(days),
   });
 
   if (isLoading) {
@@ -187,10 +218,17 @@ export function AnalyticsView() {
     value: data.verdictMix[l] ?? 0,
   }));
 
-  const dailyData = data.dailyVolume.map((d) => ({
+  // 7d stays daily; wider windows aggregate to weekly buckets so labels stay readable
+  const isWeekly = days > 7;
+  const volumeRows = isWeekly ? bucketWeekly(data.dailyVolume) : data.dailyVolume;
+  const dailyData = volumeRows.map((d) => ({
     ...d,
-    day: format(new Date(`${d.date}T00:00:00`), "EEE"),
+    day: isWeekly
+      ? format(new Date(`${d.date}T00:00:00`), "MMM d")
+      : format(new Date(`${d.date}T00:00:00`), "EEE"),
   }));
+  const rangeAnalyses = data.rangeTotals?.analyses;
+  const rangeReviews = data.rangeTotals?.reviews;
 
   const reviewData = (["accept", "edit", "reject"] as const)
     .map((k) => ({ action: k, count: data.reviewActions[k] ?? 0 }))
@@ -205,12 +243,43 @@ export function AnalyticsView() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
-      {/* header */}
-      <header className="mb-6">
-        <h1 className="text-xl font-semibold text-zinc-100">Operations analytics</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          Volume, verdict mix, abstention, overrides, latency and fairness (BR-16/17).
-        </p>
+      {/* header + range selector */}
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-zinc-100">Operations analytics</h1>
+          <p className="mt-1 text-sm text-zinc-500">
+            Volume, verdict mix, abstention, overrides, latency and fairness (BR-16/17).
+          </p>
+        </div>
+        <div
+          role="group"
+          aria-label="Date range"
+          className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/70 p-1"
+        >
+          {RANGE_OPTIONS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={days === option}
+              onClick={() => setDays(option)}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-md px-2.5 font-mono text-[11px] font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40",
+                days === option
+                  ? "bg-zinc-800 text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-300"
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 rounded-full transition-colors",
+                  days === option ? "bg-emerald-400" : "bg-zinc-700"
+                )}
+              />
+              {option}d
+            </button>
+          ))}
+        </div>
       </header>
 
       {/* KPI tiles */}
@@ -219,33 +288,49 @@ export function AnalyticsView() {
           icon={FileSearch}
           value={data.totals.analyses.toLocaleString()}
           label="Analyses"
+          accent="text-emerald-400/80"
+          tip={
+            typeof rangeAnalyses === "number"
+              ? `${rangeAnalyses.toLocaleString()} in the last ${days} days`
+              : undefined
+          }
         />
         <KpiTile
           icon={BookOpenCheck}
           value={data.totals.reviews.toLocaleString()}
           label="Reviews"
+          accent="text-teal-400/80"
+          tip={
+            typeof rangeReviews === "number"
+              ? `${rangeReviews.toLocaleString()} in the last ${days} days`
+              : undefined
+          }
         />
         <KpiTile
           icon={ScrollText}
           value={data.totals.appeals.toLocaleString()}
           label="Appeals"
+          accent="text-amber-400/80"
         />
         <KpiTile
           icon={HelpCircle}
           value={fmtPercent(data.abstentionRate)}
           label="Abstention"
+          accent="text-zinc-400"
           tip="Share of analyses the system responsibly abstained on"
         />
         <KpiTile
           icon={Gauge}
           value={fmtPercent(data.overrideRate)}
           label="Override rate"
+          accent="text-rose-400/80"
           tip="Reviews where the human changed the model's recommendation"
         />
         <KpiTile
           icon={Gauge}
           value={`${data.latency.p95.toLocaleString()} ms`}
           label="Latency p95"
+          accent="text-emerald-400/80"
         />
       </section>
 
@@ -311,18 +396,30 @@ export function AnalyticsView() {
 
         <Card className="border-zinc-800 bg-zinc-900/40">
           <CardHeader className="p-4 pb-0">
-            <CardTitle className="text-sm font-medium text-zinc-200">Daily volume (7 days)</CardTitle>
+            <CardTitle className="text-sm font-medium text-zinc-200">
+              {isWeekly ? "Weekly volume" : "Daily volume"} ({days} days)
+            </CardTitle>
             <CardDescription className="text-xs">
-              Analyses per day with Contradicted overlaid.
+              Analyses per {isWeekly ? "week" : "day"} with Contradicted overlaid
+              {typeof rangeAnalyses === "number" && (
+                <> · <span className="font-mono tabular-nums text-zinc-400">{rangeAnalyses.toLocaleString()}</span> in range</>
+              )}
+              .
             </CardDescription>
           </CardHeader>
           <CardContent className="p-4">
-            <div className="h-64" role="img" aria-label="Bar chart of analyses per day for the last 7 days, with contradicted subset highlighted">
+            <div
+              className="h-64"
+              role="img"
+              aria-label={`Bar chart of analyses per ${isWeekly ? "week" : "day"} for the last ${days} days, with contradicted subset highlighted`}
+            >
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={dailyData} barGap={2} margin={{ top: 8, right: 4, left: -16, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                   <XAxis
                     dataKey="day"
+                    // thin out tick labels when there are many weekly buckets
+                    interval={dailyData.length > 10 ? Math.ceil(dailyData.length / 8) : 0}
                     tick={{ fontSize: 11, fill: "#a1a1aa" }}
                     axisLine={{ stroke: "#3f3f46" }}
                     tickLine={false}

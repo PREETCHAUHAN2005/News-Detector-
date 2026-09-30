@@ -181,3 +181,29 @@ Stage Summary:
 - All BRD safety properties untouched (evidence-first ordering, abstention, BR-08 reuse, reviewer gates verified still working end-to-end).
 - VLM visual scores: 7.5/8.0 → 8.5/9.0.
 - Unresolved / next-phase candidates (priority): (1) engine process supervision (auto-restart if sandbox reboots — manual `cd mini-services/nlp-engine && bun run dev`); (2) release gates still honestly failing (macro-F1 0.70/0.85, contradicted precision 83%/95% — shadow-mode by design); (3) possible future UX: review-queue bulk actions, analytics date-range selector, palette "actions" (e.g. sign out), saved filters; (4) i18n + live web retrieval remain Phase 4 per BRD.
+
+---
+Task ID: 11
+Agent: Main (Z.ai Code)
+Task: Round 3 — regression QA + 4 new features + styling polish
+
+Work Log:
+- Status assessment: all services healthy (Next.js 3000, engine 8001, /api/health ok), dev.log + lint clean.
+- agent-browser regression pass (fresh session): signin → badge → palette nav → review queue → analytics → BR-08 analyze reuse (Contradicted 93%, no NaN) → mobile 390×844 no overflow → console clean. No regressions from Task 10.
+- FEATURE A — Analytics date-range selector (BR-16):
+  * Backend /api/analytics: `days` query param (7/30/90, validated, default 7); dailyVolume window sized by days; NEW rangeTotals { analyses, reviews } counted within the window.
+  * api.ts fetchAnalytics(days?) + AnalyticsDTO.days/rangeTotals types.
+  * analytics-view: 7d/30d/90d chip group in header (aria-pressed, emerald active dot, focus rings); query key ["analytics", days]; 7d stays daily ("EEE" labels), 30d/90d aggregate to Monday-based weekly buckets ("MMM d" labels) via bucketWeekly(); XAxis interval thins labels when >10 buckets; chart title/description adapt ("Weekly volume (90 days)" · "N in range"); KPI tile tooltips show range-scoped counts ("N in the last 30 days").
+- FEATURE B — Sidebar live pending-review count (BR-11 "action needed"):
+  * app-sidebar queries ["analyses","pending-count"] → fetchAnalyses({status:"pending_review", pageSize:1}).total; amber mono badge w/ 99+ cap + tooltip on the Review queue nav item; key prefix "analyses" means every ["analyses"] invalidation refreshes it.
+  * BUG CAUGHT DURING TESTING (same class as Task-10 topbar bug): query fired pre-auth → 401 → error state stuck after login (API said 6, badge hidden). FIXED by gating BOTH sidebar queries (pending-count AND sidebar-recent, which had the same latent issue) on `enabled: status === "authenticated"` via useSession. Verified: badge hidden pre-auth, shows "6" immediately post-auth, live-decrements 6→5 after a review submission (invalidation chain).
+- FEATURE C — Palette action commands: Command union gains {kind:"action", run}; "Sign out" (LogOut icon, rose icon-tile when selected) executes signOut({callbackUrl:"/"}) directly. Verified end-to-end (palette → "sign" → Enter → signed out).
+- FEATURE D — Review-queue saved filters: localStorage key veritas-review-filters {search,status,label,highImpactOnly}; loadSavedFilters() validates every field against STATUS_OPTIONS/ALL_LABELS (corrupt data → defaults); useState(loadSavedFilters) once on mount (component is client-only post-auth → hydration-safe); persist-on-change effect (storage write only, lint-clean); "saved" BookmarkCheck chip w/ tooltip appears when filters active; Clear filters also resets storage. Verified: set filter → stored → reload → filter restored ("Awaiting review", 6 analyses, saved chip).
+- STYLING: KPI tiles get per-metric colored icon accents (emerald/teal/amber/rose/zinc) + hover lift (-translate-y-0.5 + shadow); queue cards get status-colored left accent bars (pending=amber, in_review=teal, reviewed=emerald, appealed=rose) + pl-5 + hover elevation; range chips tactile w/ emerald active dot.
+- Verification: lint clean; tsc clean; console error-free; mobile 390×844 no overflow + range chips visible; VLM review: analytics 9/10, review queue 8.5/10 (remaining suggestions: KPI sparklines/deltas, bulk queue actions — the latter was consciously SKIPPED because batch-confirming verdicts would violate BRD §12 evidence-first human-in-the-loop review discipline).
+- QA screenshots: docs/qa/qa3-01…qa3-09-*.png.
+
+Stage Summary:
+- 1 regression-free QA pass; 4 new features (date-range analytics w/ weekly bucketing, live pending badge, palette sign-out, saved filters); 1 new bug found+fixed (pre-auth query 401-stick in sidebar); styling polish (KPI accents, queue status bars, tactile chips).
+- Demo state note: analysis #springfield-monorail (prediction claim) now in_review after Priya's accept during badge-live-update testing — demonstrates BR-12 awaiting-senior state.
+- Unresolved / next-phase candidates: (1) engine supervision still manual; (2) release gates honestly failing (shadow-mode by design); (3) VLM-suggested KPI sparklines/deltas (needs backend period-over-period computation); (4) bulk queue actions REJECTED for BRD safety; (5) palette could gain more actions (export current dossier, toggle theme) and mid-typing recents refresh.

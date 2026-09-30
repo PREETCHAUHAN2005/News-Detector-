@@ -15,14 +15,18 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    // Date-range window for volume metrics (BR-16): 7/30/90 days, default 7.
+    const { searchParams } = new URL(req.url);
+    const daysRaw = parseInt(searchParams.get("days") ?? "7", 10);
+    const days = [7, 30, 90].includes(daysRaw) ? daysRaw : 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const [total, byStatus, byLabel, latencyAgg, reviewsAgg, appealsAgg, daily, byTopic] =
       await Promise.all([
         db.analysis.count(),
@@ -63,9 +67,9 @@ export async function GET() {
     }
     const abstained = labelCounts[TAXONOMY.UNVERIFIED] ?? 0;
 
-    // volume by day (last 7 days)
+    // volume by day (last N days)
     const dayMap = new Map<string, { total: number; contradicted: number }>();
-    for (let i = 6; i >= 0; i--) {
+    for (let i = days - 1; i >= 0; i--) {
       const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
       dayMap.set(d.toISOString().slice(0, 10), { total: 0, contradicted: 0 });
     }
@@ -90,6 +94,12 @@ export async function GET() {
       ? resolutionHours[Math.floor(resolutionHours.length / 2)]
       : null;
 
+    // range-scoped volume + review counts (for the date-range selector)
+    const [rangeAnalyses, rangeReviews] = await Promise.all([
+      db.analysis.count({ where: { createdAt: { gte: since } } }),
+      db.review.count({ where: { createdAt: { gte: since } } }),
+    ]);
+
     // fairness (BR-17): verdict mix by topic
     const topicStats = await Promise.all(
       byTopic.map(async (t) => {
@@ -110,6 +120,8 @@ export async function GET() {
     );
 
     return NextResponse.json({
+      days,
+      rangeTotals: { analyses: rangeAnalyses, reviews: rangeReviews },
       totals: {
         analyses: total,
         reviews: totalReviews,

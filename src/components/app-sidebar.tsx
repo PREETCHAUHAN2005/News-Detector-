@@ -1,5 +1,6 @@
 "use client";
 /** App sidebar — Cursor-style navigation with recent analyses and profile. */
+import { useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BookOpenCheck,
@@ -17,6 +18,7 @@ import { fetchAnalyses } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { VerdictBadge } from "@/components/verdict/verdict-badge";
 import { VeritasLogo } from "@/components/veritas-logo";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const NAV: { id: ViewId; label: string; icon: typeof FileSearch; hint?: string }[] = [
   { id: "home", label: "Analyze", icon: Sparkles },
@@ -31,12 +33,28 @@ const NAV: { id: ViewId; label: string; icon: typeof FileSearch; hint?: string }
 export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { view, setView, openAnalysis } = useAppStore();
   const queryClient = useQueryClient();
+  // Both list queries need an authenticated /api/analyses call — gate them on
+  // the session so they never fire (and stick in a 401 error state) pre-login.
+  const { status: sessionStatus } = useSession();
+  const authenticated = sessionStatus === "authenticated";
 
   const { data: recent } = useQuery({
     queryKey: ["sidebar-recent"],
     queryFn: () => fetchAnalyses({ pageSize: 6 }),
     staleTime: 15_000,
+    enabled: authenticated,
   });
+
+  // Live "action needed" count (BR-11): analyses awaiting their first human
+  // decision. Key starts with "analyses" so every invalidation of the
+  // analyses cache refreshes this badge automatically.
+  const { data: pending } = useQuery({
+    queryKey: ["analyses", "pending-count"],
+    queryFn: () => fetchAnalyses({ status: "pending_review", pageSize: 1 }),
+    staleTime: 15_000,
+    enabled: authenticated,
+  });
+  const pendingCount = pending?.total ?? 0;
 
   const go = (id: ViewId) => {
     setView(id);
@@ -85,8 +103,31 @@ export function AppSidebar({ onNavigate }: { onNavigate?: () => void }) {
               />
               {item.label}
               {item.id === "review" && (
-                <span className="ml-auto rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-amber-300">
-                  human
+                <span className="ml-auto flex items-center gap-1.5">
+                  {pendingCount > 0 ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-semibold tabular-nums",
+                            "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                          )}
+                        >
+                          {pendingCount > 99 ? "99+" : pendingCount}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="right"
+                        className="border border-zinc-800 bg-zinc-900 text-zinc-300"
+                      >
+                        {pendingCount.toLocaleString()} analys{pendingCount === 1 ? "is" : "es"} awaiting
+                        review — the queue needs a human decision (BR-11).
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  <span className="rounded-full border border-zinc-700/60 bg-zinc-800/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-500">
+                    human
+                  </span>
                 </span>
               )}
             </button>

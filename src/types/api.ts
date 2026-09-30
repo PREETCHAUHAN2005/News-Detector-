@@ -118,6 +118,9 @@ export interface AuditLogDTO {
 }
 
 export interface AnalyticsDTO {
+  /** Volume window for dailyVolume / rangeTotals (7/30/90, default 7). */
+  days?: number;
+  rangeTotals?: { analyses: number; reviews: number };
   totals: { analyses: number; reviews: number; appeals: number; reviewers: number };
   statusMix: Record<string, number>;
   verdictMix: Record<string, number>;

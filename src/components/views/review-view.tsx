@@ -12,6 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
 import {
+  BookmarkCheck,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -58,6 +59,55 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "appealed", label: "Appealed" },
 ];
 
+/* ── Saved filters (localStorage) ─────────────────────────────────────
+ * ReviewView only mounts client-side after the session check, so reading
+ * localStorage during the initial render is hydration-safe. Writes happen
+ * in a plain effect (storage only — no state set). */
+const FILTERS_KEY = "veritas-review-filters";
+
+interface SavedFilters {
+  search: string;
+  status: string;
+  label: string;
+  highImpactOnly: boolean;
+}
+
+const DEFAULT_FILTERS: SavedFilters = {
+  search: "",
+  status: "all",
+  label: "all",
+  highImpactOnly: false,
+};
+
+function loadSavedFilters(): SavedFilters {
+  try {
+    const raw = window.localStorage.getItem(FILTERS_KEY);
+    if (!raw) return DEFAULT_FILTERS;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return DEFAULT_FILTERS;
+    const p = parsed as Partial<Record<keyof SavedFilters, unknown>>;
+    return {
+      search: typeof p.search === "string" ? p.search.slice(0, 200) : "",
+      status:
+        typeof p.status === "string" && STATUS_OPTIONS.some((o) => o.value === p.status)
+          ? p.status
+          : "all",
+      label: typeof p.label === "string" && ALL_LABELS.includes(p.label as never) ? p.label : "all",
+      highImpactOnly: p.highImpactOnly === true,
+    };
+  } catch {
+    return DEFAULT_FILTERS;
+  }
+}
+
+function saveFilters(filters: SavedFilters): void {
+  try {
+    window.localStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+  } catch {
+    /* storage unavailable (private mode/quota) — persistence is best-effort */
+  }
+}
+
 export function ReviewView() {
   const openAnalysis = useAppStore((s) => s.openAnalysis);
   const { data: session } = useSession();
@@ -66,11 +116,13 @@ export function ReviewView() {
   const isReviewer = REVIEWER_ROLES.includes(role);
   const isSenior = SENIOR_ROLES.includes(role);
 
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
-  const [status, setStatus] = useState("all");
-  const [label, setLabel] = useState("all");
-  const [highImpactOnly, setHighImpactOnly] = useState(false);
+  // restored once on mount (client-only component — hydration-safe)
+  const [saved] = useState(loadSavedFilters);
+  const [search, setSearch] = useState(saved.search);
+  const [debounced, setDebounced] = useState(saved.search.trim());
+  const [status, setStatus] = useState(saved.status);
+  const [label, setLabel] = useState(saved.label);
+  const [highImpactOnly, setHighImpactOnly] = useState(saved.highImpactOnly);
   const [page, setPage] = useState(1);
 
   // debounce the search box (~300ms); typing always restarts pagination
@@ -81,6 +133,11 @@ export function ReviewView() {
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
+
+  // persist the active filter set (storage write only — never sets state)
+  useEffect(() => {
+    saveFilters({ search, status, label, highImpactOnly });
+  }, [search, status, label, highImpactOnly]);
 
   const filters = useMemo(
     () => ({
@@ -228,6 +285,21 @@ export function ReviewView() {
           >
             {total} {total === 1 ? "analysis" : "analyses"}
           </span>
+
+          {hasActiveFilters && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex h-6 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 text-[10px] font-medium text-emerald-400/90">
+                  <BookmarkCheck className="size-3" aria-hidden />
+                  saved
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="border border-zinc-800 bg-zinc-900 text-zinc-300">
+                Filters persist across sessions on this device — reviewers keep their
+                triage context between visits.
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
 
@@ -265,6 +337,7 @@ export function ReviewView() {
                   setLabel("all");
                   setHighImpactOnly(false);
                   setPage(1);
+                  saveFilters(DEFAULT_FILTERS);
                 }}
               >
                 <RotateCw /> Clear filters
@@ -313,6 +386,14 @@ export function ReviewView() {
 
 /* ─────────────────────────── Queue card ─────────────────────────── */
 
+/** Status-coloured left accent — triage state readable at a glance. */
+const STATUS_ACCENT: Record<string, string> = {
+  pending_review: "bg-amber-400/70",
+  in_review: "bg-teal-400/70",
+  reviewed: "bg-emerald-400/70",
+  appealed: "bg-rose-400/70",
+};
+
 function QueueCard({
   analysis,
   index,
@@ -326,6 +407,7 @@ function QueueCard({
   const assessableCount = claims.filter((c) => c.assessable).length;
   const evidenceCount = claims.reduce((sum, c) => sum + (c.verdict?.evidence.length ?? 0), 0);
   const reviewCount = claims.reduce((sum, c) => sum + (c.verdict?.reviews.length ?? 0), 0);
+  const accent = STATUS_ACCENT[analysis.status] ?? "bg-zinc-600";
 
   return (
     <motion.button
@@ -334,9 +416,14 @@ function QueueCard({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.3), ease: "easeOut" }}
-      className="group relative block w-full rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 text-left transition-colors hover:border-zinc-600 hover:bg-zinc-900/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60"
+      className="group relative block w-full rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 pl-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-zinc-600 hover:bg-zinc-900/70 hover:shadow-lg hover:shadow-black/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/60"
       aria-label={`Open analysis: ${analysis.inputText.slice(0, 80)}`}
     >
+      {/* status accent bar */}
+      <span
+        aria-hidden
+        className={`absolute inset-y-2 left-0 w-1 rounded-full ${accent}`}
+      />
       {/* row 1 — status chips */}
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={analysis.status} />

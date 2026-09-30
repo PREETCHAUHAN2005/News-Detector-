@@ -8,13 +8,14 @@
  * so search/cursor state resets naturally without effects.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSession } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BookOpenCheck,
   ChartColumn,
   FileSearch,
   History,
+  LogOut,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -39,7 +40,8 @@ const NAV_TARGETS: { id: ViewId; label: string; hint: string; icon: typeof FileS
 
 type Command =
   | { kind: "view"; id: ViewId; label: string; hint: string; icon: typeof FileSearch }
-  | { kind: "analysis"; id: string; label: string; hint: string; analysis: AnalysisDTO };
+  | { kind: "analysis"; id: string; label: string; hint: string; analysis: AnalysisDTO }
+  | { kind: "action"; id: string; label: string; hint: string; icon: typeof FileSearch; run: () => void };
 
 /** Case-insensitive substring match across label + hint. */
 function matches(command: Command, query: string): boolean {
@@ -111,7 +113,17 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       hint: a.overallLabel ?? "Unverified",
       analysis: a,
     }));
-    return [...views, ...analyses].filter((c) => matches(c, query));
+    const actions: Command[] = [
+      {
+        kind: "action",
+        id: "signout",
+        label: "Sign out",
+        hint: "end this session",
+        icon: LogOut,
+        run: () => void signOut({ callbackUrl: "/" }),
+      },
+    ];
+    return [...views, ...analyses, ...actions].filter((c) => matches(c, query));
   }, [recent, query]);
 
   /* Cursor clamped at render time — never out of range. */
@@ -122,6 +134,8 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
     onRun();
     if (command.kind === "view") {
       setView(command.id);
+    } else if (command.kind === "action") {
+      command.run();
     } else {
       openAnalysis(command.id);
     }
@@ -167,10 +181,13 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
         )}
         {commands.map((command, index) => {
           const selected = index === cursorSafe;
-          const isView = command.kind === "view";
-          const Icon = isView ? (command as { icon: typeof FileSearch }).icon : FileSearch;
-          const dot = !isView
-            ? LABEL_META[(command as { hint: string }).hint as VerdictLabel]?.dot ?? "bg-zinc-400"
+          const isAction = command.kind === "action";
+          const Icon =
+            command.kind === "view" || command.kind === "action"
+              ? command.icon
+              : FileSearch;
+          const dot = command.kind === "analysis"
+            ? LABEL_META[command.hint as VerdictLabel]?.dot ?? "bg-zinc-400"
             : null;
           return (
             <button
@@ -189,7 +206,9 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
                 className={cn(
                   "flex size-6 shrink-0 items-center justify-center rounded border",
                   selected
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                    ? isAction
+                      ? "border-rose-500/30 bg-rose-500/10 text-rose-400"
+                      : "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
                     : "border-zinc-800 bg-zinc-900 text-zinc-500"
                 )}
               >

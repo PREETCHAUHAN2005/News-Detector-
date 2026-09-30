@@ -115,8 +115,9 @@ export function resolveAppeal(id: string, status: string, resolutionNotes?: stri
   });
 }
 
-export function fetchAnalytics() {
-  return jsonFetch<AnalyticsDTO>("/api/analytics");
+export function fetchAnalytics(days?: number) {
+  const qs = typeof days === "number" ? `?days=${days}` : "";
+  return jsonFetch<AnalyticsDTO>(`/api/analytics${qs}`);
 }
 
 export function fetchAudit(params: { action?: string; entityType?: string; page?: number }) {
