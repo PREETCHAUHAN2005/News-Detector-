@@ -18,6 +18,8 @@ import {
   History,
   Loader2,
   LogOut,
+  Printer,
+  Scale,
   ScrollText,
   Search,
   ShieldCheck,
@@ -97,6 +99,7 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
   const openAnalysis = useAppStore((s) => s.openAnalysis);
   const activeAnalysisId = useAppStore((s) => s.activeAnalysisId);
   const view = useAppStore((s) => s.view);
+  const setPrecedentSearchOpen = useAppStore((s) => s.setPrecedentSearchOpen);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -143,31 +146,51 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       hint: a.overallLabel ?? "Unverified",
       analysis: a,
     }));
-    const actions: Command[] = [];
+    const actions: Command[] = [
+      {
+        kind: "action",
+        id: "find-precedents",
+        label: "Find precedents…",
+        hint: "search previous human rulings",
+        icon: Scale,
+        run: () => setPrecedentSearchOpen(true),
+      },
+    ];
     if (view === "analysis" && activeAnalysisId && cachedDossier?.analysis) {
       const dossier = cachedDossier.analysis;
-      actions.push({
-        kind: "action",
-        id: "export-dossier",
-        label: "Export current dossier",
-        hint: `download #${dossier.id.slice(0, 8)} as Markdown`,
-        icon: Download,
-        run: () => {
-          try {
-            downloadReport(dossier);
-            toast({
-              title: "Report exported",
-              description: `veritas-report-${dossier.id.slice(0, 8)}.md downloaded.`,
-            });
-          } catch {
-            toast({
-              variant: "destructive",
-              title: "Export failed",
-              description: "The report could not be generated in this browser.",
-            });
-          }
+      actions.push(
+        {
+          kind: "action",
+          id: "export-dossier",
+          label: "Export current dossier",
+          hint: `download #${dossier.id.slice(0, 8)} as Markdown`,
+          icon: Download,
+          run: () => {
+            try {
+              downloadReport(dossier);
+              toast({
+                title: "Report exported",
+                description: `veritas-report-${dossier.id.slice(0, 8)}.md downloaded.`,
+              });
+            } catch {
+              toast({
+                variant: "destructive",
+                title: "Export failed",
+                description: "The report could not be generated in this browser.",
+              });
+            }
+          },
         },
-      });
+        {
+          kind: "action",
+          id: "print-dossier",
+          label: "Print / save dossier as PDF",
+          hint: "archive the evidence-first document",
+          icon: Printer,
+          // let the palette unmount before the (blocking) print snapshot
+          run: () => setTimeout(() => window.print(), 80),
+        }
+      );
     }
     actions.push({
       kind: "action",
@@ -178,7 +201,7 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
       run: () => void signOut({ callbackUrl: "/" }),
     });
     return [...views, ...analyses, ...actions].filter((c) => matches(c, query));
-  }, [recent, searchMode, searchResults, query, view, activeAnalysisId, cachedDossier, toast]);
+  }, [recent, searchMode, searchResults, query, view, activeAnalysisId, cachedDossier, toast, setPrecedentSearchOpen]);
 
   /* Cursor clamped at render time — never out of range. */
   const cursorSafe = commands.length ? Math.min(cursor, commands.length - 1) : 0;

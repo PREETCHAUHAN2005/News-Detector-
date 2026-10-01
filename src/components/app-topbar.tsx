@@ -46,7 +46,7 @@ export function AppTopbar({ title }: { title: string }) {
     .toUpperCase();
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-950/80 px-3 backdrop-blur">
+    <header data-chrome="topbar" className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-950/80 px-3 backdrop-blur">
       {/* left: mobile nav + breadcrumb */}
       <div className="flex min-w-0 items-center gap-2">
         <Sheet open={mobileNav} onOpenChange={setMobileNav}>

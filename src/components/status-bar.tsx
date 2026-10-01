@@ -34,6 +34,7 @@ export function StatusBar() {
 
   return (
     <footer
+      data-chrome="statusbar"
       className="flex h-8 shrink-0 items-center justify-between gap-4 border-t border-zinc-800/80 bg-zinc-950/95 px-3 text-[11px] text-zinc-500"
       role="contentinfo"
     >

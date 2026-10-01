@@ -32,6 +32,7 @@ const SECTIONS: { title: string; rows: ShortcutRow[] }[] = [
       { keys: ["g", "u"], description: "Audit log" },
       { keys: ["g", "s"], description: "Trusted-source registry" },
       { keys: ["g", "m"], description: "Model card & release gates" },
+      { keys: ["g", "p"], description: "Find precedents (search previous human rulings)" },
     ],
   },
   {

@@ -103,6 +103,14 @@ export function fetchSimilarAnalyses(id: string) {
   return jsonFetch<SimilarAnalysesResponse>(`/api/analyses/${id}/similar`);
 }
 
+/** Search precedents by free text (no analysis created, nothing persisted). */
+export function searchPrecedents(text: string) {
+  return jsonFetch<SimilarAnalysesResponse>("/api/precedents", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
 export function submitReview(body: {
   verdictId: string;
   action: "accept" | "edit" | "reject";

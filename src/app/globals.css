@@ -245,3 +245,61 @@ mark {
   outline: 2px solid oklch(0.796 0.135 166.113 / 55%);
   outline-offset: 1px;
 }
+
+/* ── Layout-shift & typography details ───────────────────────────── */
+
+/* Reserve the scrollbar lane on the view scroller — switching between a
+   scrolling view (review queue) and a short one (model card) no longer shifts
+   content horizontally. */
+#main-content {
+  scrollbar-gutter: stable;
+}
+
+/* Softer ragged-right for body copy (browsers that support it). */
+p, li, blockquote {
+  text-wrap: pretty;
+}
+
+/* ── Print / archive-a-dossier styles ───────────────────────────────
+   Printing (or “Save as PDF”) from a dossier strips the workbench chrome
+   and prints the evidence-first document on its own. Surfaces keep their
+   dark fidelity via print-color-adjust so verdict colours stay meaningful. */
+@media print {
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* hide the single-page-app chrome (sidebar, topbar, status bar, dialogs) */
+  [data-chrome],
+  [data-slot="dialog-overlay"],
+  [data-slot="dialog-content"],
+  [data-state] {
+    display: none !important;
+  }
+  /* let the document flow across pages instead of the screen shell */
+  body,
+  body > div {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: oklch(0.141 0.005 285.823) !important;
+  }
+  #main-content {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    scrollbar-gutter: auto;
+  }
+  /* views are width-constrained — use the full page width */
+  #main-content > div {
+    max-width: none !important;
+  }
+  /* avoid cards/sections being sliced mid-row where possible */
+  section,
+  article,
+  .rounded-lg,
+  .rounded-xl {
+    break-inside: avoid;
+  }
+}

@@ -9,6 +9,7 @@ import { AppTopbar } from "@/components/app-topbar";
 import { CommandPalette } from "@/components/command-palette";
 import { KeyboardShortcuts } from "@/components/shortcuts-help";
 import { GNav } from "@/components/g-nav";
+import { PrecedentSearchDialog } from "@/components/precedent-search-dialog";
 import { StatusBar } from "@/components/status-bar";
 import { VeritasLogo } from "@/components/veritas-logo";
 import { useAppStore } from "@/lib/store";
@@ -60,8 +61,12 @@ function VeritasApp() {
 
   return (
     <div className="flex h-screen max-h-screen overflow-hidden bg-background text-foreground">
-      {/* Sidebar — static on desktop */}
-      <aside className="hidden w-[264px] shrink-0 border-r border-zinc-800/80 lg:block" aria-label="Sidebar">
+      {/* Sidebar — static on desktop (hidden when printing the dossier) */}
+      <aside
+        data-chrome="sidebar"
+        className="hidden w-[264px] shrink-0 border-r border-zinc-800/80 lg:block"
+        aria-label="Sidebar"
+      >
         <AppSidebar />
       </aside>
 
@@ -85,6 +90,7 @@ function VeritasApp() {
         </main>
         <StatusBar />
         <CommandPalette />
+        <PrecedentSearchDialog />
         <KeyboardShortcuts />
         <GNav />
       </div>

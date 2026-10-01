@@ -16,6 +16,7 @@ import {
   Inbox,
   Info,
   Loader2,
+  Scale,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
@@ -58,6 +59,7 @@ export function HomeView() {
   const setView = useAppStore((s) => s.setView);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
   const markAnalyzed = useAppStore((s) => s.markAnalyzed);
+  const setPrecedentSearchOpen = useAppStore((s) => s.setPrecedentSearchOpen);
 
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Claim");
@@ -293,10 +295,19 @@ export function HomeView() {
           </form>
           <p
             id="composer-hint"
-            className="mt-2.5 flex items-center gap-1.5 text-xs text-zinc-500"
+            className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-zinc-500"
           >
             <ShieldCheck className="size-3.5 shrink-0 text-emerald-400/80" aria-hidden="true" />
             Uses the trusted-source registry · verdicts cite evidence · abstains when unsure
+            <span aria-hidden="true" className="text-zinc-700">·</span>
+            <button
+              type="button"
+              onClick={() => setPrecedentSearchOpen(true)}
+              className="inline-flex items-center gap-1 underline-offset-4 transition-colors hover:text-emerald-300 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+            >
+              <Scale className="size-3" aria-hidden="true" />
+              find precedents first
+            </button>
           </p>
         </motion.section>
 

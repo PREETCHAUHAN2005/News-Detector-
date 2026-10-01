@@ -12,14 +12,16 @@ import { useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
-import { BookmarkCheck, Check, ChevronLeft, ChevronRight, Clock, CopyPlus, Eye, FolderSearch, Gavel, Inbox, Layers, MousePointerClick, RotateCw, Search, ShieldAlert, ShieldCheck, Tag, UserRound } from "lucide-react";
+import { BookmarkCheck, Check, ChevronLeft, ChevronRight, Clock, CopyPlus, Download, Eye, FolderSearch, Gavel, Inbox, Layers, Loader2, MousePointerClick, RotateCw, Search, ShieldAlert, ShieldCheck, Tag, UserRound, X } from "lucide-react";
 
 import { fetchAnalyses } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { ALL_LABELS, LABEL_META, REVIEWER_ROLES, ROLE_DISPLAY, SENIOR_ROLES } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import type { AnalysisDTO } from "@/types/api";
 import { StatusBadge, VerdictBadge } from "@/components/verdict/verdict-badge";
+import { CopyButton } from "@/components/copy-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -31,8 +33,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
 
 const PAGE_SIZE = 12;
+/** governance export cap — full history stays available via the audit log (BR-13) */
+const EXPORT_CAP = 500;
+/** how long a drill preset stays re-appliable (framer-motion briefly remounts
+ *  the entering view, so consume-on-first-mount would swallow the preset) */
+const PRESET_TTL_MS = 8000;
 
 const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "all", label: "All statuses" },
@@ -94,7 +102,7 @@ function saveFilters(filters: SavedFilters): void {
 export function ReviewView() {
   const openAnalysis = useAppStore((s) => s.openAnalysis);
   const reviewPreset = useAppStore((s) => s.reviewPreset);
-  const setReviewPreset = useAppStore((s) => s.setReviewPreset);
+  const { toast } = useToast();
   const { data: session } = useSession();
   const user = session?.user as { name?: string | null; role?: string } | undefined;
   const role = user?.role ?? "viewer";
@@ -102,19 +110,27 @@ export function ReviewView() {
   const isSenior = SENIOR_ROLES.includes(role);
 
   // restored once on mount (client-only component — hydration-safe); a
-  // one-shot cross-view preset (analytics KPI drills) takes priority so the
-  // queue opens with the drill's filter already applied
+  // cross-view drill preset (analytics KPI / fairness topic) takes priority
+  // while it's fresh. Presets carry a timestamp instead of being consumed on
+  // first mount: framer-motion's view transition briefly REMOUNTS this
+  // component, which would otherwise swallow a consume-once preset.
+  const preset =
+    reviewPreset && (reviewPreset.at ?? 0) > Date.now() - PRESET_TTL_MS ? reviewPreset : null;
   const [saved] = useState(loadSavedFilters);
   const [search, setSearch] = useState(saved.search);
   const [debounced, setDebounced] = useState(saved.search.trim());
+  /** one-shot topic filter from the analytics fairness drill (BR-17) */
+  const [topicFilter, setTopicFilter] = useState(
+    typeof preset?.topic === "string" && preset.topic.trim() ? preset.topic.trim().slice(0, 120) : null
+  );
   const [status, setStatus] = useState(
-    reviewPreset?.status && STATUS_OPTIONS.some((o) => o.value === reviewPreset.status)
-      ? reviewPreset.status
+    preset?.status && STATUS_OPTIONS.some((o) => o.value === preset.status)
+      ? preset.status
       : saved.status
   );
   const [label, setLabel] = useState(
-    reviewPreset?.label && ALL_LABELS.includes(reviewPreset.label as never)
-      ? reviewPreset.label
+    preset?.label && ALL_LABELS.includes(preset.label as never)
+      ? preset.label
       : saved.label
   );
   const [highImpactOnly, setHighImpactOnly] = useState(saved.highImpactOnly);
@@ -122,11 +138,6 @@ export function ReviewView() {
   /** keyboard-selected row (j/k) — null until the first keypress */
   const [selected, setSelected] = useState<number | null>(null);
   const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  // consume the one-shot preset after initial render (store write only)
-  useEffect(() => {
-    if (reviewPreset) setReviewPreset(null);
-  }, [reviewPreset, setReviewPreset]);
 
   // debounce the search box (~300ms); typing always restarts pagination
   useEffect(() => {
@@ -148,10 +159,11 @@ export function ReviewView() {
       label: label === "all" ? undefined : label,
       q: debounced || undefined,
       highImpact: highImpactOnly ? "true" : undefined,
+      topic: topicFilter ?? undefined,
       page,
       pageSize: PAGE_SIZE,
     }),
-    [status, label, debounced, highImpactOnly, page]
+    [status, label, debounced, highImpactOnly, topicFilter, page]
   );
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -223,7 +235,80 @@ export function ReviewView() {
     setPage(currentPage);
   }
 
-  const hasActiveFilters = debounced !== "" || status !== "all" || label !== "all" || highImpactOnly;
+  const hasActiveFilters = debounced !== "" || status !== "all" || label !== "all" || highImpactOnly || topicFilter !== null;
+
+  /* ── CSV export (BR-13 governance) ────────────────────────────────────
+   * Exports the CURRENT filter's result set (up to EXPORT_CAP rows) with the
+   * same query the queue uses — what you see is what you get. */
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportCsv(): Promise<void> {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      // the list API caps pageSize at 50 (UI pagination safety) — the export
+      // walks pages with the CURRENT filters until the cap or the last page
+      const exportFilters = {
+        status: status === "all" ? undefined : status,
+        label: label === "all" ? undefined : label,
+        q: debounced || undefined,
+        highImpact: highImpactOnly ? "true" : undefined,
+        topic: topicFilter ?? undefined,
+      };
+      const collected: AnalysisDTO[] = [];
+      let page = 1;
+      let total = 0;
+      do {
+        const data = await fetchAnalyses({ ...exportFilters, page, pageSize: 50 });
+        collected.push(...data.analyses);
+        total = data.total;
+        page += 1;
+      } while (collected.length < total && collected.length < EXPORT_CAP);
+      const rows: Array<Array<string | number>> = [
+        [
+          "id",
+          "created_at",
+          "status",
+          "verdict",
+          "high_impact",
+          "topic",
+          "claims",
+          "citations",
+          "latency_ms",
+          "statement",
+        ],
+      ];
+      for (const a of collected) {
+        rows.push([
+          a.id,
+          a.createdAt,
+          a.status,
+          a.overallLabel ?? "",
+          a.highImpact ? "yes" : "no",
+          a.topic ?? "",
+          a.claims.length,
+          a.claims.reduce((sum, c) => sum + (c.verdict?.evidence.length ?? 0), 0),
+          typeof a.latencyMs === "number" ? a.latencyMs : "",
+          a.inputText,
+        ]);
+      }
+      downloadCsv(`veritas-queue-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+      toast({
+        title: "Queue exported",
+        description: `${collected.length} of ${total} analyses exported to CSV${
+          total > collected.length ? ` (first ${EXPORT_CAP} — narrow the filters for the full set)` : ""
+        }.`,
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Export failed",
+        description: error instanceof Error ? error.message : "The CSV could not be generated.",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 pb-10 sm:px-6">
@@ -261,6 +346,23 @@ export function ReviewView() {
 
       {/* sticky filter bar */}
       <div className="sticky top-0 z-10 -mx-4 mb-4 border-b border-zinc-800/70 bg-zinc-950/90 px-4 py-2.5 backdrop-blur sm:-mx-6 sm:px-6">
+        {topicFilter && (
+          <div className="mb-2 flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] text-rose-200/90">
+              <Tag className="size-3" aria-hidden />
+              Topic: {topicFilter}
+              <button
+                type="button"
+                onClick={() => setTopicFilter(null)}
+                aria-label={`Clear topic filter ${topicFilter}`}
+                className="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-rose-500/20 hover:text-rose-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/40"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </span>
+            <span className="text-[11px] text-zinc-500">from the fairness drill-down (BR-17)</span>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative w-full sm:w-64">
             <Search
@@ -328,6 +430,28 @@ export function ReviewView() {
             <ShieldAlert className="size-3.5" aria-hidden />
             High-impact only
           </button>
+
+          {/* CSV export — what you see is what you get (BR-13 governance) */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => void handleExportCsv()}
+                disabled={exporting || total === 0}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 px-2.5 text-[11px] font-medium text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {exporting ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Download className="size-3.5" aria-hidden />
+                )}
+                Export CSV
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="border border-zinc-800 bg-zinc-900 text-zinc-300">
+              Download the current filter&apos;s result set as CSV — up to {EXPORT_CAP} rows.
+            </TooltipContent>
+          </Tooltip>
 
           <span
             className={cn(
@@ -408,6 +532,7 @@ export function ReviewView() {
                   setStatus("all");
                   setLabel("all");
                   setHighImpactOnly(false);
+                  setTopicFilter(null);
                   setPage(1);
                   saveFilters(DEFAULT_FILTERS);
                 }}
@@ -545,6 +670,9 @@ function QueueCard({
               {analysis.latencyMs}ms
             </span>
           )}
+          <span className="opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            <CopyButton value={analysis.inputText} label="Copy the statement text" />
+          </span>
           <time
             dateTime={analysis.createdAt}
             className="whitespace-nowrap font-mono text-[11px] text-zinc-500"

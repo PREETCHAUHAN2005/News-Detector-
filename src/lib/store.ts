@@ -15,6 +15,12 @@ export type ViewId =
 export interface ReviewPreset {
   status?: string;
   label?: string;
+  /** fairness drill hand-off (BR-17): exact topic filter */
+  topic?: string;
+  /** auto-stamped — presets stay re-appliable for a short window so the
+   *  framer-motion view transition (which briefly remounts the entering
+   *  view) can't swallow them; they expire for genuine later visits. */
+  at?: number;
 }
 
 interface AppState {
@@ -34,6 +40,9 @@ interface AppState {
   /** one-shot review-queue filter preset; consumed (cleared) on queue mount */
   reviewPreset: ReviewPreset | null;
   setReviewPreset: (preset: ReviewPreset | null) => void;
+  /** precedent search dialog (palette action + g p hotkey + composer link) */
+  precedentSearchOpen: boolean;
+  setPrecedentSearchOpen: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -48,5 +57,8 @@ export const useAppStore = create<AppState>((set) => ({
   shortcutsOpen: false,
   setShortcutsOpen: (open) => set({ shortcutsOpen: open }),
   reviewPreset: null,
-  setReviewPreset: (preset) => set({ reviewPreset: preset }),
+  setReviewPreset: (preset) =>
+    set({ reviewPreset: preset ? { ...preset, at: Date.now() } : null }),
+  precedentSearchOpen: false,
+  setPrecedentSearchOpen: (open) => set({ precedentSearchOpen: open }),
 }));

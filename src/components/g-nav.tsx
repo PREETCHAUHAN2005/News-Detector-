@@ -11,7 +11,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpRight } from "lucide-react";
 import { useAppStore, type ViewId } from "@/lib/store";
 
-/** second key → view (g-prefix) */
+/** second key → view (g-prefix); "p" opens the precedent search dialog */
 const G_KEYS: Record<string, { view: ViewId; label: string }> = {
   h: { view: "home", label: "Analyze" },
   r: { view: "review", label: "Review queue" },
@@ -38,6 +38,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 export function GNav() {
   const { status } = useSession();
   const setView = useAppStore((s) => s.setView);
+  const setPrecedentSearchOpen = useAppStore((s) => s.setPrecedentSearchOpen);
   const [pending, setPending] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -75,6 +76,9 @@ export function GNav() {
         if (target) {
           setView(target.view);
           showHint(target.label);
+        } else if (key === "p") {
+          setPrecedentSearchOpen(true);
+          showHint("Find precedents");
         }
         return;
       }
@@ -94,7 +98,7 @@ export function GNav() {
       if (timer.current) clearTimeout(timer.current);
       if (hintTimer.current) clearTimeout(hintTimer.current);
     };
-  }, [authenticated, pending, setView]);
+  }, [authenticated, pending, setView, setPrecedentSearchOpen]);
 
   if (!authenticated) return null;
 
@@ -112,7 +116,7 @@ export function GNav() {
           >
             <kbd className="veritas-kbd">g</kbd>
             <span className="text-zinc-500">then</span>
-            <span className="font-mono text-[11px] text-zinc-400">h r a e u s m</span>
+            <span className="font-mono text-[11px] text-zinc-400">h r a e u s m p</span>
           </motion.span>
         )}
         {hint && !pending && (

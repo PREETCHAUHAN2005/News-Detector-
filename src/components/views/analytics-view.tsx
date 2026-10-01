@@ -22,6 +22,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import {
   AlertTriangle,
+  ArrowRight,
   ArrowUpRight,
   BookOpenCheck,
   Clock,
@@ -962,6 +963,8 @@ export function AnalyticsView() {
  */
 function FairnessDrillDialog({ topic, onClose }: { topic: string | null; onClose: () => void }) {
   const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const setView = useAppStore((s) => s.setView);
+  const setReviewPreset = useAppStore((s) => s.setReviewPreset);
   const { data, isLoading, isError } = useQuery({
     queryKey: ["analyses", "fairness-drill", topic],
     queryFn: () => fetchAnalyses({ topic: topic ?? "", pageSize: 50 }),
@@ -1041,6 +1044,25 @@ function FairnessDrillDialog({ topic, onClose }: { topic: string | null; onClose
           Verdicts are never automated — every row opens the evidence-first dossier for human
           review (BR-11).
         </p>
+        {analyses.length > 0 && (
+          <div className="border-t border-zinc-800/70 bg-zinc-950/60 px-4 py-2.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (!topic) return;
+                onClose();
+                setReviewPreset({ topic });
+                setView("review");
+              }}
+              className="h-7 gap-1.5 border-zinc-700 bg-zinc-900/60 text-[11px] text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+            >
+              Continue in the review queue
+              <ArrowRight className="size-3" aria-hidden />
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
