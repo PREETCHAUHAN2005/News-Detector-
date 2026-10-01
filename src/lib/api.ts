@@ -213,6 +213,29 @@ export function fetchModelCard() {
   return jsonFetch<ModelCardDTO>("/api/model-card");
 }
 
+/* ── Live claim detection (composer hint — advisory, nothing persisted) ── */
+
+export interface SegmentedClaimDTO {
+  position: number;
+  text: string;
+  claimType: string;
+  assessable: boolean;
+}
+
+export interface SegmentResponse {
+  claims: SegmentedClaimDTO[];
+  total: number;
+  assessable: number;
+}
+
+/** Split pasted text into checkable claims (engine /v1/segment proxy). */
+export function segmentText(text: string) {
+  return jsonFetch<SegmentResponse>("/api/segment", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
 export function fetchHealth() {
   return jsonFetch<{ status: string; database: string; nlpEngine: string }>("/api/health");
 }

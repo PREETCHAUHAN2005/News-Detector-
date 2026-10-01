@@ -27,13 +27,36 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge, VerdictBadge } from "@/components/verdict/verdict-badge";
 import { useToast } from "@/hooks/use-toast";
-import { analyzeText, fetchAnalyses, fetchSuggestions } from "@/lib/api";
+import {
+  analyzeText,
+  fetchAnalyses,
+  fetchSuggestions,
+  segmentText,
+  type SegmentResponse,
+} from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import type { AnalysisDTO, SuggestionDTO } from "@/types/api";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ScanText } from "lucide-react";
 
 const MODES = ["Claim", "Article", "URL"] as const;
 type Mode = (typeof MODES)[number];
+
+/* Live claim detection — engine /v1/segment via /api/segment (advisory only:
+ * no evidence retrieval, no verdict, nothing persisted). Debounced so typing
+ * stays cheap; short inputs are skipped (the splitter is noise under 20 chars). */
+const SEGMENT_DEBOUNCE_MS = 700;
+const SEGMENT_MIN_CHARS = 20;
+const SEGMENT_MAX_CHARS = 2000;
+
+/** Claim-type chip colouring for the tooltip list (mirrors dossier card types). */
+function claimTypeClass(claimType: string, assessable: boolean): string {
+  if (!assessable) return "text-zinc-400";
+  if (claimType === "factual") return "text-emerald-300";
+  if (claimType === "prediction") return "text-amber-300";
+  return "text-teal-300";
+}
 
 /** Extract the HTTP status from an ApiError without leaking `any`. */
 function httpStatus(error: unknown): number | undefined {
@@ -69,6 +92,34 @@ export function HomeView() {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Claim");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /* Live claim detection: debounce the composer text, then ask the engine's
+   * deterministic claim splitter what it sees. Failed lookups degrade quietly
+   * (enabled only for sane lengths; retry off, stale data kept while typing). */
+  const [segmentInput, setSegmentInput] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const trimmed = text.trim();
+      setSegmentInput(
+        trimmed.length >= SEGMENT_MIN_CHARS && trimmed.length <= SEGMENT_MAX_CHARS
+          ? trimmed
+          : ""
+      );
+    }, SEGMENT_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+  const segmentQuery = useQuery({
+    queryKey: ["segment", segmentInput],
+    queryFn: () => segmentText(segmentInput),
+    enabled: segmentInput !== "",
+    retry: false,
+    staleTime: 60_000,
+    placeholderData: (prev: SegmentResponse | undefined) => prev,
+  });
+  const detected = segmentQuery.data;
+  const segmenting = segmentQuery.isFetching && segmentInput !== "";
+  const detectedTotal = detected?.total ?? 0;
+  const detectedAssessable = detected?.assessable ?? 0;
 
   /* Composer prefill (precedent-dialog "Analyze instead" hand-off).
    * Covers BOTH mount and already-on-home cases: the zustand subscription
@@ -296,6 +347,100 @@ export function HomeView() {
                     </button>
                   ))}
                 </div>
+
+                {/* Live claim detection — engine /v1/segment (advisory only) */}
+                {segmenting ? (
+                  <span
+                    className="inline-flex h-7 items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 px-2.5 text-[11px] font-medium text-zinc-400"
+                    aria-live="polite"
+                  >
+                    <ScanText className="size-3.5 animate-pulse text-zinc-500" aria-hidden="true" />
+                    Detecting claims…
+                  </span>
+                ) : detected && detectedTotal > 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className={cn(
+                          "inline-flex h-7 cursor-default items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                          detectedAssessable > 0
+                            ? "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300"
+                            : "border-zinc-700 bg-zinc-800/50 text-zinc-400"
+                        )}
+                        aria-live="polite"
+                      >
+                        <ScanText
+                          className={cn(
+                            "size-3.5",
+                            detectedAssessable > 0 ? "text-emerald-400/90" : "text-zinc-500"
+                          )}
+                          aria-hidden="true"
+                        />
+                        {detectedTotal === 1
+                          ? "1 claim"
+                          : `${detectedTotal} claims`}
+                        {detectedAssessable > 0 && detectedTotal > 1 && (
+                          <span className="font-mono text-emerald-400/80">
+                            · {detectedAssessable} checkable
+                          </span>
+                        )}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      className="max-w-72 border border-zinc-800 bg-zinc-900 text-left"
+                    >
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                        Engine claim split
+                      </p>
+                      <ul className="mt-1.5 space-y-1">
+                        {detected.claims.slice(0, 5).map((c, i) => (
+                          <li key={c.position} className="flex items-start gap-1.5 text-xs">
+                            <span className="mt-0.5 shrink-0 font-mono text-[10px] text-zinc-500">
+                              #{String(i + 1).padStart(2, "0")}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className={cn("font-medium", claimTypeClass(c.claimType, c.assessable))}>
+                                {c.claimType}
+                              </span>
+                              {!c.assessable && (
+                                <span className="ml-1 text-[10px] text-zinc-500">(not checkable)</span>
+                              )}
+                              <span className="mt-0.5 block line-clamp-2 leading-snug text-zinc-300">
+                                {c.text}
+                              </span>
+                            </span>
+                          </li>
+                        ))}
+                        {detectedTotal > 5 && (
+                          <li className="text-[11px] text-zinc-500">
+                            + {detectedTotal - 5} more — each claim is verified separately
+                          </li>
+                        )}
+                      </ul>
+                      <p className="mt-2 border-t border-zinc-800 pt-1.5 text-[11px] leading-snug text-zinc-500">
+                        Each checkable claim gets its own evidence retrieval and verdict —
+                        opinions stay out.
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                ) : detected && detectedAssessable === 0 && segmentInput !== "" ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="inline-flex h-7 cursor-default items-center gap-1.5 rounded-full border border-zinc-700 bg-zinc-800/50 px-2.5 text-[11px] font-medium text-zinc-400"
+                        aria-live="polite"
+                      >
+                        <ScanText className="size-3.5 text-zinc-500" aria-hidden="true" />
+                        No checkable claims
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64 border border-zinc-800 bg-zinc-900 text-left text-xs leading-snug text-zinc-300">
+                      The splitter found no factual, checkable claims — opinion or satire text
+                      is honestly labeled “Not assessable” rather than guessed.
+                    </TooltipContent>
+                  </Tooltip>
+                ) : null}
 
                 <span
                   className={cn("ml-auto font-mono text-[11px] tabular-nums", counterClass)}
