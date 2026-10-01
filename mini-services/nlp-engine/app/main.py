@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from . import taxonomy
+from .claims import extract_claims, sanitize
 from .engine import VeritasEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -62,6 +63,10 @@ class SimilarRequest(BaseModel):
     minSim: float = Field(default=0.3, ge=0.0, le=1.0)
 
 
+class SegmentRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=60000)
+
+
 @app.get("/healthz")
 async def healthz():
     return {
@@ -106,6 +111,37 @@ async def similar(req: SimilarRequest):
         }
     except Exception:  # noqa: BLE001
         return {"match": None, "matches": []}
+
+
+@app.post("/v1/segment")
+async def segment(req: SegmentRequest):
+    """Claim extraction ONLY (sentence segmentation + claim-type classification).
+
+    No retrieval, no verdict — used by the precedent search to split a pasted
+    multi-claim article into its factual claims before the per-claim
+    consistency sweep. Deterministic + fail-safe (empty list on error)."""
+    try:
+        sanitized = sanitize(req.text)
+        extracted = extract_claims(sanitized.text)
+        return {
+            "sanitization": {
+                "flags": sanitized.flags,
+                "originalLength": len(req.text),
+                "sanitizedLength": len(sanitized.text),
+            },
+            "claims": [
+                {
+                    "position": c.position,
+                    "text": c.text,
+                    "claimType": c.claim_type,
+                    "assessable": c.assessable,
+                }
+                for c in extracted
+            ],
+        }
+    except Exception:  # noqa: BLE001 — segmentation is best-effort, advisory only
+        logger.exception("segment failed")
+        return {"sanitization": {"flags": [], "originalLength": len(req.text), "sanitizedLength": 0}, "claims": []}
 
 
 @app.get("/v1/meta")

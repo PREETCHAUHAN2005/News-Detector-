@@ -11,7 +11,7 @@
  */
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Scale, Search, ShieldQuestion, Sparkles } from "lucide-react";
+import { Loader2, Scale, Search, ShieldQuestion, Sparkles, SplitSquareVertical } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -37,12 +37,16 @@ export function PrecedentSearchDialog() {
 
   const [text, setText] = useState("");
   const [results, setResults] = useState<SimilarClaimDTO[] | null>(null);
+  const [claimGroups, setClaimGroups] = useState<
+    { claimId: string; position: number; text: string; matches: SimilarClaimDTO[] }[] | null
+  >(null);
   const [checkedCount, setCheckedCount] = useState(0);
 
   const searchMutation = useMutation({
     mutationFn: (input: string) => searchPrecedents(input),
     onSuccess: (data) => {
       setResults(data.matches);
+      setClaimGroups(data.claimMatches ?? []);
       setCheckedCount(data.checkedCount);
     },
     onError: (error: Error) => {
@@ -63,6 +67,9 @@ export function PrecedentSearchDialog() {
 
   const trimmed = text.trim();
   const canSearch = trimmed.length >= 3 && !searchMutation.isPending;
+  const groups = claimGroups ?? [];
+  /** total precedents shown (per-claim groups when present, else whole-input) */
+  const shownCount = groups.length > 0 ? groups.reduce((s, g) => s + g.matches.length, 0) : (results?.length ?? 0);
 
   /** Hand the statement to the evidence composer instead of searching again. */
   function analyzeInstead(): void {
@@ -176,7 +183,7 @@ export function PrecedentSearchDialog() {
                 </p>
               </div>
             </div>
-          ) : results.length === 0 ? (
+          ) : results.length === 0 && groups.length === 0 ? (
             <div className="flex flex-col items-center gap-3 px-6 py-10 text-center">
               <span className="flex size-11 items-center justify-center rounded-full border border-zinc-700 bg-zinc-800/60">
                 <Search className="size-5 text-zinc-400" aria-hidden />
@@ -192,25 +199,65 @@ export function PrecedentSearchDialog() {
           ) : (
             <>
               <p className="border-b border-zinc-800/60 bg-zinc-950/40 px-4 py-2 text-[11px] text-zinc-500">
-                <span className="font-mono tabular-nums text-zinc-400">
-                  {results.length}
-                </span>{" "}
-                similar {results.length === 1 ? "claim" : "claims"} · ranked from{" "}
+                <span className="font-mono tabular-nums text-zinc-400">{shownCount}</span> similar{" "}
+                {shownCount === 1 ? "claim" : "claims"} · ranked from{" "}
                 {checkedCount.toLocaleString()} human-ruled records
+                {groups.length > 0 && (
+                  <span className="ml-1 inline-flex items-center gap-1 text-zinc-600">
+                    <SplitSquareVertical className="size-3" aria-hidden /> split into{" "}
+                    {groups.length} claim{groups.length === 1 ? "" : "s"} with precedent
+                  </span>
+                )}
               </p>
-              <ul className="divide-y divide-zinc-800/70">
-                {results.map((match) => (
-                  <li key={match.claimId}>
-                    <PrecedentRow
-                      match={match}
-                      onOpen={(analysisId) => {
-                        setOpen(false);
-                        openAnalysis(analysisId);
-                      }}
-                    />
-                  </li>
-                ))}
-              </ul>
+              {/* per-claim groups — which specific claim each precedent supports */}
+              {groups.length > 0 && (
+                <ul className="divide-y divide-zinc-800/70" aria-label="Precedent by claim">
+                  {groups.map((group) => (
+                    <li key={group.claimId} className="px-4 py-3">
+                      <p className="mb-1 flex items-baseline gap-2">
+                        <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                          #{String(group.position).padStart(2, "0")}
+                        </span>
+                        <span
+                          className="line-clamp-1 min-w-0 text-xs text-zinc-400"
+                          title={group.text}
+                        >
+                          {group.text}
+                        </span>
+                      </p>
+                      <ul>
+                        {group.matches.map((match) => (
+                          <li key={match.claimId}>
+                            <PrecedentRow
+                              match={match}
+                              onOpen={(analysisId) => {
+                                setOpen(false);
+                                openAnalysis(analysisId);
+                              }}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* whole-input matches — shown only when not already covered per-claim */}
+              {results.length > 0 && groups.length === 0 && (
+                <ul className="divide-y divide-zinc-800/70">
+                  {results.map((match) => (
+                    <li key={match.claimId}>
+                      <PrecedentRow
+                        match={match}
+                        onOpen={(analysisId) => {
+                          setOpen(false);
+                          openAnalysis(analysisId);
+                        }}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
             </>
           )}
         </div>

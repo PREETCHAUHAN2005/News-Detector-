@@ -144,12 +144,25 @@ export interface AnalyticsDTO {
   trends?: {
     analyses: TrendPoint;
     reviews: TrendPoint;
+    appeals: TrendPoint;
     abstention: TrendPoint;
     override: TrendPoint;
     latencyP95: TrendPoint;
   };
   /** Daily analysis totals within the window (oldest → newest). */
   sparkline?: number[];
+  /** Per-day KPI series within the window — powers every tile sparkline. */
+  series?: {
+    analyses: number[];
+    reviews: number[];
+    appeals: number[];
+    /** fraction per day (0 when the day has no analyses) */
+    abstentionRate: number[];
+    /** fraction per day (0 when the day has no reviews) */
+    overrideRate: number[];
+    /** ms per day (0 when the day has no samples) */
+    latencyP95: number[];
+  };
   totals: { analyses: number; reviews: number; appeals: number; reviewers: number };
   statusMix: Record<string, number>;
   verdictMix: Record<string, number>;

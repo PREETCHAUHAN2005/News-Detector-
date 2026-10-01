@@ -115,8 +115,24 @@ function bucketWeekly(
 
 /* ── KPI sparkline + delta chip ────────────────────────────────────── */
 
-/** Inline SVG trend line for KPI tiles (no chart lib overhead). */
-function Sparkline({ values, className }: { values: number[]; className?: string }) {
+/**
+ * Inline SVG trend line for KPI tiles (no chart lib overhead).
+ * `label` + `fmt` shape both the accessible label and the hover tooltip so
+ * each KPI reads naturally (counts, rates, ms). Flat series (max === min)
+ * render a level line — still informative ("stable across the window").
+ */
+function Sparkline({
+  values,
+  label,
+  fmt = (v) => String(Math.round(v)),
+  className,
+}: {
+  values: number[];
+  /** what the series measures, e.g. "Daily review volume" */
+  label: string;
+  fmt?: (v: number) => string;
+  className?: string;
+}) {
   if (values.length < 2) return null;
   const w = 72;
   const h = 24;
@@ -135,6 +151,7 @@ function Sparkline({ values, className }: { values: number[]; className?: string
   const [lastX, lastY] = points[points.length - 1];
   const rising = values[values.length - 1] >= values[0];
   const stroke = rising ? "#34d399" : "#fb7185";
+  const tooltip = `${label}: ${fmt(values[0])} → ${fmt(values[values.length - 1])} over the window (min ${fmt(min)}, max ${fmt(max)})`;
   return (
     <svg
       viewBox={`0 0 ${w} ${h}`}
@@ -142,8 +159,10 @@ function Sparkline({ values, className }: { values: number[]; className?: string
       height={h}
       className={className}
       role="img"
-      aria-label={`Daily volume trend: ${min} to ${max} per day over the window`}
+      aria-label={tooltip}
     >
+      {/* native SVG tooltip — hover shows the formatted window summary */}
+      <title>{tooltip}</title>
       <polygon points={area} fill={stroke} opacity={0.08} />
       {/* faint baseline so the micro-trend has a floor reference */}
       <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="#3f3f46" strokeWidth={0.5} />
@@ -218,6 +237,8 @@ function KpiTile({
   accent = "text-zinc-500",
   delta,
   sparkline,
+  sparklineLabel = "Daily volume",
+  sparklineFmt,
   days,
   onDrill,
   drillHint,
@@ -231,6 +252,10 @@ function KpiTile({
   accent?: string;
   delta?: KpiDelta;
   sparkline?: number[];
+  /** what the sparkline measures (aria-label + hover tooltip) */
+  sparklineLabel?: string;
+  /** formats sparkline values into the tooltip (rates → %, latency → ms) */
+  sparklineFmt?: (v: number) => string;
   days?: number;
   /** drill-down action — renders an affordance button on the tile */
   onDrill?: () => void;
@@ -290,7 +315,12 @@ function KpiTile({
             {delta && days ? <DeltaChip delta={delta} days={days} /> : null}
           </div>
           {sparkline && sparkline.length > 1 ? (
-            <Sparkline values={sparkline} className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100" />
+            <Sparkline
+              values={sparkline}
+              label={sparklineLabel}
+              fmt={sparklineFmt}
+              className="shrink-0 opacity-70 transition-opacity group-hover:opacity-100"
+            />
           ) : null}
         </div>
       </CardContent>
@@ -421,6 +451,9 @@ export function AnalyticsView() {
   // period-over-period KPI trends (backend-computed, same window as the selector)
   const trends = data.trends;
   const sparkline = data.sparkline ?? [];
+  const series = data.series;
+  const fmtRate = (v: number) => fmtPercent(v, 0);
+  const fmtMs = (v: number) => `${Math.round(v)} ms`;
 
   /** Long-format CSV export of the current window's metrics (BR-16/17 ops data). */
   function exportCsv(snapshot: AnalyticsDTO): void {
@@ -458,6 +491,29 @@ export function AnalyticsView() {
       }
       for (const d of snapshot.dailyVolume) {
         push("daily_volume", d.date, d.total, `contradicted=${d.contradicted}`);
+      }
+      // per-day KPI series (same window, aligned by index — BR-16 ops data)
+      if (snapshot.series) {
+        const s = snapshot.series;
+        const len = Math.max(
+          s.analyses.length,
+          s.reviews.length,
+          s.appeals.length,
+          s.abstentionRate.length,
+          s.overrideRate.length,
+          s.latencyP95.length
+        );
+        for (let i = 0; i < len; i++) {
+          push(
+            "daily_series",
+            snapshot.dailyVolume[i]?.date ?? `day+${i}`,
+            s.analyses[i] ?? 0,
+            `reviews=${s.reviews[i] ?? 0} appeals=${s.appeals[i] ?? 0} ` +
+              `abstention_rate=${(s.abstentionRate[i] ?? 0).toFixed(4)} ` +
+              `override_rate=${(s.overrideRate[i] ?? 0).toFixed(4)} ` +
+              `latency_p95_ms=${Math.round(s.latencyP95[i] ?? 0)}`
+          );
+        }
       }
       for (const t of snapshot.fairnessByTopic) {
         push(
@@ -543,7 +599,8 @@ export function AnalyticsView() {
           label="Analyses"
           accent="text-emerald-400/80"
           days={days}
-          sparkline={sparkline}
+          sparkline={series?.analyses ?? sparkline}
+          sparklineLabel="Daily analysis volume"
           delta={trends?.analyses ? { ...trends.analyses, kind: "count", good: "up" } : undefined}
           tip={
             typeof rangeAnalyses === "number"
@@ -562,6 +619,8 @@ export function AnalyticsView() {
           label="Reviews"
           accent="text-teal-400/80"
           days={days}
+          sparkline={series?.reviews}
+          sparklineLabel="Daily review volume"
           delta={trends?.reviews ? { ...trends.reviews, kind: "count", good: "up" } : undefined}
           tip={
             typeof rangeReviews === "number"
@@ -576,6 +635,11 @@ export function AnalyticsView() {
           value={data.totals.appeals.toLocaleString()}
           label="Appeals"
           accent="text-amber-400/80"
+          days={days}
+          sparkline={series?.appeals}
+          sparklineLabel="Daily new appeals"
+          delta={trends?.appeals ? { ...trends.appeals, kind: "count", good: "none" } : undefined}
+          tip="Appeals filed against human-confirmed verdicts (BR-14)"
           onDrill={() => setView("appeals")}
           drillHint="Open the appeals workflow"
         />
@@ -585,6 +649,9 @@ export function AnalyticsView() {
           label="Abstention"
           accent="text-zinc-400"
           days={days}
+          sparkline={series?.abstentionRate}
+          sparklineLabel="Daily abstention rate"
+          sparklineFmt={fmtRate}
           delta={trends?.abstention ? { ...trends.abstention, kind: "rate", good: "none" } : undefined}
           tip="Share of analyses the system responsibly abstained on"
           onDrill={scrollToSection("kpi-drill-verdict-mix")}
@@ -601,6 +668,9 @@ export function AnalyticsView() {
           label="Override rate"
           accent="text-rose-400/80"
           days={days}
+          sparkline={series?.overrideRate}
+          sparklineLabel="Daily override rate"
+          sparklineFmt={fmtRate}
           delta={trends?.override ? { ...trends.override, kind: "rate", good: "down" } : undefined}
           tip="Reviews where the human changed the model's recommendation"
           onDrill={scrollToSection("kpi-drill-review-actions")}
@@ -612,6 +682,9 @@ export function AnalyticsView() {
           label="Latency p95"
           accent="text-emerald-400/80"
           days={days}
+          sparkline={series?.latencyP95.filter((v) => v > 0)}
+          sparklineLabel="Daily engine latency p95"
+          sparklineFmt={fmtMs}
           delta={trends?.latencyP95 ? { ...trends.latencyP95, kind: "ms", good: "down" } : undefined}
           onDrill={() => setView("model-card")}
           drillHint="Open the model card — engine performance metrics"
@@ -670,12 +743,19 @@ export function AnalyticsView() {
                 <span className="text-[11px] uppercase tracking-wide text-zinc-500">analyses</span>
               </div>
             </div>
-            <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+            <ul className="mt-3 grid grid-cols-2 justify-items-center gap-x-4 gap-y-1.5 sm:grid-cols-3">
               {donutData.map((d) => (
-                <li key={d.label} className="flex items-center gap-1.5 text-[11.5px] font-medium text-zinc-300" title={LABEL_META[d.label].description}>
+                <li key={d.label} className="flex items-center gap-1.5 text-[11.5px] font-medium text-zinc-200" title={LABEL_META[d.label].description}>
                   <span className="size-2 rounded-full" style={{ background: LABEL_HEX[d.label] }} aria-hidden />
                   {LABEL_META[d.label].short}
-                  <span className="font-mono tabular-nums text-zinc-400">{d.value}</span>
+                  <span className="font-mono tabular-nums text-zinc-300">
+                    {d.value}
+                    {/* direct share label — the grey Unverified slice reads without hover */}
+                    <span className="text-zinc-400">
+                      {" "}
+                      · {totalVerdicts ? Math.round((d.value / totalVerdicts) * 100) : 0}%
+                    </span>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -714,7 +794,7 @@ export function AnalyticsView() {
                   />
                   <YAxis
                     allowDecimals={false}
-                    tick={{ fontSize: 11, fill: "#a1a1aa" }}
+                    tick={{ fontSize: 11, fill: "#b6b6c0" }}
                     axisLine={false}
                     tickLine={false}
                   />

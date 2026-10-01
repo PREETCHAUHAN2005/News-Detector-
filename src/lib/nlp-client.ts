@@ -78,6 +78,13 @@ export interface SimilarMatch {
   reviewerName?: string | null;
 }
 
+export interface EngineSegmentedClaim {
+  position: number;
+  text: string;
+  claimType: string;
+  assessable: boolean;
+}
+
 const DEGRADED: EngineAnalysis = {
   modelVersion: "unavailable",
   dataVersion: "unavailable",
@@ -172,6 +179,30 @@ export async function engineSimilarList(
   try {
     const data = (await res.json()) as { matches?: SimilarMatch[] };
     return Array.isArray(data.matches) ? data.matches : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Claim extraction only (no retrieval, no verdict) — lets the precedent search
+ * split a pasted multi-claim article before the per-claim consistency sweep.
+ * Fail-safe: engine unreachable → empty list (whole-text search still works).
+ */
+export async function engineSegment(text: string): Promise<EngineSegmentedClaim[]> {
+  const res = await fetchWithTimeout(
+    `${NLP_BASE}/v1/segment`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    },
+    10_000
+  );
+  if (!res || !res.ok) return [];
+  try {
+    const data = (await res.json()) as { claims?: EngineSegmentedClaim[] };
+    return Array.isArray(data.claims) ? data.claims : [];
   } catch {
     return [];
   }

@@ -31,6 +31,7 @@ interface TrendPoint {
 interface Trends {
   analyses: TrendPoint;
   reviews: TrendPoint;
+  appeals: TrendPoint;
   abstention: TrendPoint;
   override: TrendPoint;
   latencyP95: TrendPoint;
@@ -55,7 +56,7 @@ export async function GET(req: Request) {
     const daysRaw = parseInt(searchParams.get("days") ?? "7", 10);
     const days = [7, 30, 90].includes(daysRaw) ? daysRaw : 7;
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    const [total, byStatus, byLabel, latencyAgg, reviewsAgg, appealsAgg, daily, byTopic] =
+    const [total, byStatus, byLabel, latencyAgg, reviewsAgg, appealsAgg, daily, byTopic, reviewsDaily, appealsDaily] =
       await Promise.all([
         db.analysis.count(),
         db.analysis.groupBy({ by: ["status"], _count: { _all: true } }),
@@ -78,6 +79,15 @@ export async function GET(req: Request) {
           orderBy: { _count: { topic: "desc" } },
           take: 8,
         }),
+        // per-day KPI series (window-scoped): reviews + appeals for the sparklines
+        db.review.findMany({
+          where: { createdAt: { gte: since } },
+          select: { createdAt: true, action: true },
+        }),
+        db.appeal.findMany({
+          where: { createdAt: { gte: since } },
+          select: { createdAt: true },
+        }),
       ]);
 
     const latencies = latencyAgg
@@ -96,10 +106,18 @@ export async function GET(req: Request) {
     const abstained = labelCounts[TAXONOMY.UNVERIFIED] ?? 0;
 
     // volume by day (last N days)
-    const dayMap = new Map<string, { total: number; contradicted: number }>();
+    const dayMap = new Map<
+      string,
+      { total: number; contradicted: number; unverified: number; latencies: number[] }
+    >();
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
-      dayMap.set(d.toISOString().slice(0, 10), { total: 0, contradicted: 0 });
+      dayMap.set(d.toISOString().slice(0, 10), {
+        total: 0,
+        contradicted: 0,
+        unverified: 0,
+        latencies: [],
+      });
     }
     for (const a of daily) {
       const key = a.createdAt.toISOString().slice(0, 10);
@@ -107,8 +125,43 @@ export async function GET(req: Request) {
       if (entry) {
         entry.total += 1;
         if (a.overallLabel === TAXONOMY.CONTRADICTED) entry.contradicted += 1;
+        if (a.overallLabel === TAXONOMY.UNVERIFIED) entry.unverified += 1;
+        if (typeof a.latencyMs === "number" && a.latencyMs > 0) entry.latencies.push(a.latencyMs);
       }
     }
+
+    // per-day reviews/appeals + override counts for the KPI sparklines
+    const reviewDayMap = new Map<string, { total: number; overrides: number }>();
+    for (const r of reviewsDaily) {
+      const key = r.createdAt.toISOString().slice(0, 10);
+      const entry = reviewDayMap.get(key) ?? { total: 0, overrides: 0 };
+      entry.total += 1;
+      if (r.action === "edit" || r.action === "reject") entry.overrides += 1;
+      reviewDayMap.set(key, entry);
+    }
+    const appealDayMap = new Map<string, number>();
+    for (const a of appealsDaily) {
+      const key = a.createdAt.toISOString().slice(0, 10);
+      appealDayMap.set(key, (appealDayMap.get(key) ?? 0) + 1);
+    }
+
+    // window-length per-day series powering every KPI tile sparkline (the
+    // legacy `sparkline` stays for backwards compatibility — it equals series.analyses)
+    const series = {
+      analyses: Array.from(dayMap.values()).map((v) => v.total),
+      reviews: Array.from(dayMap.keys()).map((k) => reviewDayMap.get(k)?.total ?? 0),
+      appeals: Array.from(dayMap.keys()).map((k) => appealDayMap.get(k) ?? 0),
+      abstentionRate: Array.from(dayMap.values()).map((v) => (v.total ? v.unverified / v.total : 0)),
+      overrideRate: Array.from(dayMap.keys()).map(
+        (k) => {
+          const r = reviewDayMap.get(k);
+          return r && r.total ? r.overrides / r.total : 0;
+        }
+      ),
+      latencyP95: Array.from(dayMap.values()).map((v) =>
+        v.latencies.length ? percentile([...v.latencies].sort((a, b) => a - b), 95) : 0
+      ),
+    };
 
     // appeal SLA (BR-14): median resolution time
     const resolvedAppeals = await db.appeal.findMany({
@@ -124,7 +177,7 @@ export async function GET(req: Request) {
 
     // Previous window for period-over-period KPI trends (BR-16 ops insight).
     const prevSince = new Date(since.getTime() - days * 24 * 60 * 60 * 1000);
-    const [prevDaily, reviewsByActionRange, reviewsByActionPrev] = await Promise.all([
+    const [prevDaily, reviewsByActionRange, reviewsByActionPrev, prevAppeals] = await Promise.all([
       db.analysis.findMany({
         where: { createdAt: { gte: prevSince, lt: since } },
         select: { createdAt: true, overallLabel: true, latencyMs: true },
@@ -139,6 +192,7 @@ export async function GET(req: Request) {
         _count: { _all: true },
         where: { createdAt: { gte: prevSince, lt: since } },
       }),
+      db.appeal.count({ where: { createdAt: { gte: prevSince, lt: since } } }),
     ]);
 
     // Range-scoped totals derived from the window queries above (no extra round-trip).
@@ -166,6 +220,7 @@ export async function GET(req: Request) {
     const trends: Trends = {
       analyses: { current: rangeAnalyses, previous: prevDaily.length, delta: relDelta(rangeAnalyses, prevDaily.length) },
       reviews: { current: rangeReviews, previous: prevReviews, delta: relDelta(rangeReviews, prevReviews) },
+      appeals: { current: appealsDaily.length, previous: prevAppeals, delta: relDelta(appealsDaily.length, prevAppeals) },
       abstention: { current: curAbstain, previous: prevAbstain, delta: prevDaily.length ? curAbstain - prevAbstain : null },
       override: { current: curOverrideRate, previous: prevOverrideRate, delta: prevReviews ? curOverrideRate - prevOverrideRate : null },
       latencyP95: { current: curLat, previous: prevLat, delta: relDelta(curLat, prevLat) },
@@ -194,7 +249,8 @@ export async function GET(req: Request) {
       days,
       rangeTotals: { analyses: rangeAnalyses, reviews: rangeReviews },
       trends,
-      sparkline: Array.from(dayMap.values()).map((v) => v.total),
+      series,
+      sparkline: series.analyses,
       totals: {
         analyses: total,
         reviews: totalReviews,
@@ -213,7 +269,11 @@ export async function GET(req: Request) {
       reviewActions: Object.fromEntries(reviewsAgg.map((r) => [r.action, r._count._all])),
       appealMix: Object.fromEntries(appealsAgg.map((a) => [a.status, a._count._all])),
       appealMedianResolutionHours: medianResolutionHours,
-      dailyVolume: Array.from(dayMap.entries()).map(([date, v]) => ({ date, ...v })),
+      dailyVolume: Array.from(dayMap.entries()).map(([date, v]) => ({
+        date,
+        total: v.total,
+        contradicted: v.contradicted,
+      })),
       fairnessByTopic: topicStats,
     });
   } catch (error) {

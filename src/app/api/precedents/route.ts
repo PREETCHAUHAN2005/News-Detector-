@@ -13,7 +13,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { engineSimilarList } from "@/lib/nlp-client";
+import { engineSegment, engineSimilarList } from "@/lib/nlp-client";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,8 @@ const MAX_CANDIDATES = 400;
 const TOP_N = 5;
 const MIN_SIM = 0.3;
 const MAX_TEXT = 2000;
+const MAX_CLAIM_PRECEDENTS = 8;
+const CLAIM_TOP_N = 2;
 
 interface PrecedentsBody {
   text?: unknown;
@@ -84,23 +86,67 @@ export async function POST(req: Request) {
 
     // enrich with candidate metadata (similarity comes from the engine)
     const byId = new Map(candidates.map((c) => [c.claimId, c]));
-    const enriched = matches
-      .map((m) => {
-        const meta = m.claimId ? byId.get(m.claimId) : undefined;
-        if (!meta) return null;
-        return {
-          claimId: meta.claimId,
-          analysisId: meta.analysisId,
-          text: meta.text,
-          finalLabel: meta.finalLabel,
-          similarity: typeof m.similarity === "number" ? m.similarity : 0,
-          reviewedAt: meta.reviewedAt,
-          reviewerName: meta.reviewerName,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null);
+    const enrich = (list: Awaited<ReturnType<typeof engineSimilarList>>) =>
+      list
+        .map((m) => {
+          const meta = m.claimId ? byId.get(m.claimId) : undefined;
+          if (!meta) return null;
+          return {
+            claimId: meta.claimId,
+            analysisId: meta.analysisId,
+            text: meta.text,
+            finalLabel: meta.finalLabel,
+            similarity: typeof m.similarity === "number" ? m.similarity : 0,
+            reviewedAt: meta.reviewedAt,
+            reviewerName: meta.reviewerName,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    return NextResponse.json({ matches: enriched, checkedCount: candidates.length });
+    const enriched = enrich(matches);
+
+    // Per-claim sweep (multi-claim inputs): segment the pasted text via the
+    // engine (claim extraction only — no verdict is issued), then compare each
+    // assessable claim against the same human-ruled corpus so the reviewer sees
+    // which specific claim each precedent supports. Advisory only — nothing is
+    // analyzed or persisted. Engine segmentation failure degrades to the
+    // whole-text matches above.
+    const segments = await engineSegment(text);
+    const assessableClaims = segments
+      .filter((c) => c.assessable)
+      .slice(0, MAX_CLAIM_PRECEDENTS);
+    const claimMatches: {
+      claimId: string;
+      position: number;
+      text: string;
+      matches: NonNullable<(typeof enriched)[number]>[];
+    }[] = [];
+    if (assessableClaims.length > 1) {
+      for (const claim of assessableClaims) {
+        const claimMatchList = await engineSimilarList(
+          claim.text,
+          candidates,
+          CLAIM_TOP_N,
+          MIN_SIM
+        );
+        const enrichedClaimMatches = enrich(claimMatchList);
+        if (enrichedClaimMatches.length > 0) {
+          claimMatches.push({
+            // segmented claims have no DB id — synthetic key for the client
+            claimId: `segment-${claim.position}`,
+            position: claim.position,
+            text: claim.text,
+            matches: enrichedClaimMatches,
+          });
+        }
+      }
+    }
+
+    return NextResponse.json({
+      matches: enriched,
+      checkedCount: candidates.length,
+      claimMatches,
+    });
   } catch (error) {
     console.error("precedents-search-error", error);
     return NextResponse.json({ error: "Failed to search precedents" }, { status: 500 });
