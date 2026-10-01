@@ -1,16 +1,22 @@
 /**
  * Veritas engine watchdog — keeps the Python NLP engine (port 8001) alive.
  *
- * Pings /healthz every 30s; on failure it re-spawns `bun run dev` inside
- * mini-services/nlp-engine and waits (up to 60s) for warmup. All events are
- * logged to stdout — run it detached:
+ * Pings /healthz every 30s; on failure it re-spawns the engine (plain uvicorn,
+ * no --reload watcher) and waits (up to 60s) for warmup. Engine stdout/stderr
+ * are captured to engine.log so crashes leave a trace. Run it detached:
  *
  *   setsid bun run scripts/engine-watchdog.ts >> mini-services/nlp-engine/watchdog.log 2>&1 &
  */
+import { openSync } from "node:fs";
+
 const ENGINE_URL = "http://127.0.0.1:8001/healthz";
 const ENGINE_DIR = new URL("../mini-services/nlp-engine", import.meta.url).pathname;
+const ENGINE_LOG = new URL("../mini-services/nlp-engine/engine.log", import.meta.url).pathname;
 const CHECK_INTERVAL_MS = 30_000;
 const WARMUP_TIMEOUT_MS = 60_000;
+
+// append fd for engine output — opened once, reused for every (re)spawn
+const engineLogFd = openSync(ENGINE_LOG, "a");
 
 function log(message: string): void {
   console.log(`[watchdog ${new Date().toISOString()}] ${message}`);
@@ -30,11 +36,13 @@ async function healthy(): Promise<boolean> {
 }
 
 async function startEngine(): Promise<number> {
-  const proc = Bun.spawn(["bun", "run", "dev"], {
+  // plain uvicorn (no --reload): the file-watcher supervisor was implicated
+  // in silent engine deaths; engine output goes to engine.log for traceability
+  const proc = Bun.spawn(["bun", "run", "start"], {
     cwd: ENGINE_DIR,
     stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
+    stdout: engineLogFd,
+    stderr: engineLogFd,
   });
   proc.unref();
   return proc.pid;

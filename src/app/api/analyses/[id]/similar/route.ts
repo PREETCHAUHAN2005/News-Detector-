@@ -9,8 +9,7 @@
  * Fail-safe: engine unreachable → empty list (the panel degrades quietly).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { engineSimilarList } from "@/lib/nlp-client";
 
@@ -24,8 +23,8 @@ const CLAIM_TOP_N = 2;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const { id } = await params;

@@ -10,8 +10,7 @@
  * Fail-safe: engine unreachable → empty list (the dialog degrades quietly).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { engineSegment, engineSimilarList } from "@/lib/nlp-client";
 
@@ -31,8 +30,8 @@ interface PrecedentsBody {
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

@@ -2,11 +2,11 @@
  * POST /api/feedback — reviewer feedback as labelled data (BR-15).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { ALL_LABELS, REVIEWER_ROLES } from "@/lib/taxonomy";
 
 export const dynamic = "force-dynamic";
@@ -20,8 +20,13 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const user = session?.user as { id?: string; role?: string } | undefined;
+    // feedback feeds retraining — keep it abuse-resistant without login (BRD §8)
+    const rl = rateLimit(`feedback:${clientIp(req)}`, 30, 30);
+    if (!rl.ok) {
+      return NextResponse.json({ error: "Too many feedback submissions — please retry shortly" }, { status: 429 });
+    }
+
+    const user = await getSessionUser();
     if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

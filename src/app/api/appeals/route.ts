@@ -2,9 +2,8 @@
  * /api/appeals — GET list, POST file (public, rate-limited) (BR-14).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -20,8 +19,8 @@ const fileSchema = z.object({
 
 export async function GET(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const { searchParams } = new URL(req.url);
@@ -83,13 +82,13 @@ export async function POST(req: Request) {
       data: { status: "appealed" },
     });
 
-    const session = await getServerSession(authOptions);
+    const actor = await getSessionUser();
     await audit(
       "appeal_filed",
       "appeal",
       appeal.id,
       { verdictId, analysisId: verdict.claim.analysis.id, appellantName },
-      (session?.user as { id?: string } | undefined)?.id ?? null
+      actor?.id ?? null
     );
 
     return NextResponse.json({ appeal });

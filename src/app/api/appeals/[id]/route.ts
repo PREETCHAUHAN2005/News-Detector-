@@ -2,11 +2,11 @@
  * PATCH /api/appeals/[id] — resolve an appeal (senior reviewer / admin) (BR-14).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { SENIOR_ROLES } from "@/lib/taxonomy";
 
 export const dynamic = "force-dynamic";
@@ -18,8 +18,13 @@ const resolveSchema = z.object({
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getServerSession(authOptions);
-    const user = session?.user as { id?: string; role?: string } | undefined;
+    // appeal resolution is a governance action — abuse-resistant without login (BRD §8)
+    const rl = rateLimit(`appeal-resolve:${clientIp(req)}`, 20, 20);
+    if (!rl.ok) {
+      return NextResponse.json({ error: "Too many resolution attempts — please retry shortly" }, { status: 429 });
+    }
+
+    const user = await getSessionUser();
     if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

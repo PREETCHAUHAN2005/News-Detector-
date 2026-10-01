@@ -3,11 +3,11 @@
  * mandatory second review for high-impact cases (BR-11, BR-12).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { ALL_LABELS, REVIEWER_ROLES, SENIOR_ROLES, TAXONOMY } from "@/lib/taxonomy";
 
 export const dynamic = "force-dynamic";
@@ -21,8 +21,14 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const user = session?.user as { id?: string; name?: string | null; role?: string } | undefined;
+    // With the login feature disabled the demo reviewer identity is applied,
+    // so reviewers' destructive actions stay abuse-resistant (BRD §8).
+    const rl = rateLimit(`review:${clientIp(req)}`, 20, 20);
+    if (!rl.ok) {
+      return NextResponse.json({ error: "Too many review actions — please retry shortly" }, { status: 429 });
+    }
+
+    const user = await getSessionUser();
     if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

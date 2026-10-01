@@ -4,11 +4,22 @@
  * audit exports.
  */
 
-/** RFC-4180 CSV cell escaping. */
+/**
+ * RFC-4180 CSV cell escaping + CSV-formula-injection defence (CWE-1236).
+ *
+ * Cells that BEGIN with =, +, -, @, tab or CR would be interpreted as
+ * formulas by Excel / LibreOffice / Google Sheets when a reviewer opens an
+ * export. Prefixing a single quote neutralises the payload while keeping the
+ * text visible (the standard mitigation recommended by OWASP).
+ */
 export function csvCell(value: string | number): string {
   const s = String(value);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
+  // pure numeric values (incl. negatives like "-0.05") stay numeric in
+  // spreadsheet apps — everything else formula-capable gets the quote guard
+  const isNumeric = /^-?\d+(\.\d+)?$/.test(s.trim());
+  const guarded = !isNumeric && /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  if (/[",\n\r]/.test(guarded)) return `"${guarded.replace(/"/g, '""')}"`;
+  return guarded;
 }
 
 /** Build a CSV document from a matrix (first row = header). */

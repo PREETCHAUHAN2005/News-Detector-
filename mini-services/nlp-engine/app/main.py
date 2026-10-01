@@ -83,14 +83,15 @@ async def analyze(req: AnalyzeRequest):
     Unverified (fail-safe, BRD §6.8)."""
     try:
         return _engine().analyze(req.text, req.topK)
-    except Exception as exc:  # noqa: BLE001 — deliberate fail-safe boundary
+    except Exception:  # noqa: BLE001 — deliberate fail-safe boundary
+        # never leak internal exception details to the API consumer
         logger.exception("analyze failed")
         return {
             "modelVersion": taxonomy.MODEL_VERSION,
             "dataVersion": taxonomy.DATA_VERSION,
             "latencyMs": 0,
             "degraded": True,
-            "degradationReason": str(exc),
+            "degradationReason": "internal analysis error",
             "claims": [],
             "highImpact": {"flag": False, "categories": [], "matchedTerms": []},
             "overall": {"label": taxonomy.UNVERIFIED, "confidence": 0.0},

@@ -31,6 +31,7 @@ import { fetchAnalyses, type AnalysesListResponse } from "@/lib/api";
 import { downloadReport } from "@/lib/report";
 import { LABEL_META, type VerdictLabel } from "@/lib/taxonomy";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { AUTH_LOGIN_ENABLED } from "@/lib/auth-mode";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { AnalysisDTO } from "@/types/api";
@@ -192,14 +193,18 @@ function PaletteBody({ onRun }: { onRun: () => void }) {
         }
       );
     }
-    actions.push({
-      kind: "action",
-      id: "signout",
-      label: "Sign out",
-      hint: "end this session",
-      icon: LogOut,
-      run: () => void signOut({ callbackUrl: "/" }),
-    });
+    // Sign out belongs to the (currently disabled) login feature — offering it
+    // would immediately re-trigger the automatic demo session.
+    if (AUTH_LOGIN_ENABLED) {
+      actions.push({
+        kind: "action",
+        id: "signout",
+        label: "Sign out",
+        hint: "end this session",
+        icon: LogOut,
+        run: () => void signOut({ callbackUrl: "/" }),
+      });
+    }
     return [...views, ...analyses, ...actions].filter((c) => matches(c, query));
   }, [recent, searchMode, searchResults, query, view, activeAnalysisId, cachedDossier, toast, setPrecedentSearchOpen]);
 

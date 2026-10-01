@@ -9,9 +9,8 @@
  * to a confident verdict.
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
@@ -27,13 +26,15 @@ const bodySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    // AUTH_LOGIN_ENABLED=false → getSessionUser falls back to the demo reviewer,
+    // so this 401 only fires once the login feature is re-enabled.
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Sign in to run analyses" }, { status: 401 });
     }
 
     const ip = clientIp(req);
-    const userId = (session.user as { id?: string }).id ?? "unknown";
+    const userId = user.id ?? "unknown";
     const rl = rateLimit(`analyze:${userId}:${ip}`, 8, 8);
     if (!rl.ok) {
       return NextResponse.json(

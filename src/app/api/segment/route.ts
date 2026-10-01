@@ -11,8 +11,7 @@
  * nothing is persisted and no verdict is ever produced here.
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { engineSegment } from "@/lib/nlp-client";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 
@@ -25,8 +24,8 @@ const MAX_CLAIMS = 12;
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

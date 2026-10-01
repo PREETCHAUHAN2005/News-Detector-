@@ -3,11 +3,11 @@
  * GET: list. POST (admin): add or update.
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
+import { clientIp, rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +21,8 @@ const upsertSchema = z.object({
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const sources = await db.trustedSource.findMany({ orderBy: { reliabilityScore: "desc" } });
@@ -35,8 +35,13 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    const user = session?.user as { id?: string; role?: string } | undefined;
+    // registry writes are administrative — keep them abuse-resistant without login
+    const rl = rateLimit(`source-upsert:${clientIp(req)}`, 10, 10);
+    if (!rl.ok) {
+      return NextResponse.json({ error: "Too many registry updates — please retry shortly" }, { status: 429 });
+    }
+
+    const user = await getSessionUser();
     if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

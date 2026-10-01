@@ -3,16 +3,15 @@
  * proxied server-side so the engine is never exposed to the browser directly.
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { engineEval, engineModelCard } from "@/lib/nlp-client";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const [card, evalResult] = await Promise.all([engineModelCard(), engineEval()]);

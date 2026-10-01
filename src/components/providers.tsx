@@ -1,7 +1,8 @@
 "use client";
-import { SessionProvider } from "next-auth/react";
+import { SessionProvider, signIn, useSession } from "next-auth/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { AUTH_LOGIN_ENABLED, DEMO_AUTO_ACCOUNT } from "@/lib/auth-mode";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -18,7 +19,36 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
   return (
     <SessionProvider refetchOnWindowFocus={false}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {/* Login feature disabled (see src/lib/auth-mode.ts): silently establish
+            the demo reviewer session so the workbench opens with NO login screen
+            while every role-gated feature keeps working. */}
+        {!AUTH_LOGIN_ENABLED ? <AutoSession /> : null}
+        {children}
+      </QueryClientProvider>
     </SessionProvider>
   );
+}
+
+/** Establishes the automatic demo session whenever none is present. */
+function AutoSession() {
+  const { status } = useSession();
+
+  useEffect(() => {
+    if (status !== "unauthenticated") return;
+    let cancelled = false;
+    void signIn("credentials", {
+      email: DEMO_AUTO_ACCOUNT.email,
+      password: DEMO_AUTO_ACCOUNT.password,
+      redirect: false,
+    }).catch(() => {
+      // ignored — the workbench still renders (server-side identity fallback)
+      if (!cancelled) return;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
+
+  return null;
 }

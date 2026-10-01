@@ -7,6 +7,7 @@ import { ChevronDown, Keyboard, Loader2, LogIn, LogOut, Menu, Search, Settings2,
 import { fetchModelCard } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
+import { AUTH_LOGIN_ENABLED } from "@/lib/auth-mode";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -160,17 +161,23 @@ export function AppTopbar({ title }: { title: string }) {
                   {ROLE_DISPLAY[user?.role ?? "viewer"] ?? user?.role}
                 </p>
               </DropdownMenuLabel>
-              <DropdownMenuSeparator className="bg-zinc-800" />
-              <DropdownMenuItem
-                onClick={() => signOut({ callbackUrl: "/" })}
-                className="text-zinc-400 focus:text-zinc-100"
-              >
-                <LogOut className="size-4" aria-hidden />
-                Sign out
-              </DropdownMenuItem>
+              {/* Sign out is part of the (currently disabled) login feature —
+                  hidden so the auto demo session isn't revoked. */}
+              {AUTH_LOGIN_ENABLED ? (
+                <>
+                  <DropdownMenuSeparator className="bg-zinc-800" />
+                  <DropdownMenuItem
+                    onClick={() => signOut({ callbackUrl: "/" })}
+                    className="text-zinc-400 focus:text-zinc-100"
+                  >
+                    <LogOut className="size-4" aria-hidden />
+                    Sign out
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
-        ) : (
+        ) : AUTH_LOGIN_ENABLED ? (
           <span
             className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[11px] text-zinc-500 sm:flex"
             title="Sign in to access the workbench"
@@ -178,7 +185,7 @@ export function AppTopbar({ title }: { title: string }) {
             <LogIn className="size-3" aria-hidden />
             Sign in to continue
           </span>
-        )}
+        ) : null}
       </div>
     </header>
   );

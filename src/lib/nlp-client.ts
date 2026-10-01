@@ -3,10 +3,64 @@
  * All calls are fail-safe: timeouts and errors degrade to "Unverified"
  * and route the item to the human review queue (BRD §6.8) — never to a
  * confident verdict.
+ *
+ * SUPERVISION: the sandbox reaps background processes spawned from tool
+ * shells, so the engine cannot be kept alive by an external watchdog.
+ * `ensureEngine()` therefore runs INSIDE this Next.js server process
+ * (the platform keeps port 3000 alive): it probes /healthz and, when the
+ * engine is down, re-spawns it as a detached child of this process.
  */
+import { spawn } from "node:child_process";
+import { openSync } from "node:fs";
+import { join } from "node:path";
 import { TAXONOMY } from "@/lib/taxonomy";
 
 const NLP_BASE = process.env.NLP_ENGINE_URL ?? "http://127.0.0.1:8001";
+const ENGINE_DIR = join(process.cwd(), "mini-services", "nlp-engine");
+
+/** append fd for the supervised engine's output (opened once, kept open) */
+const engineLogFd = openSync(join(ENGINE_DIR, "engine.log"), "a");
+
+let engineBootPromise: Promise<void> | null = null;
+
+async function engineHealthyFast(): Promise<boolean> {
+  const res = await fetchWithTimeout(`${NLP_BASE}/healthz`, { method: "GET" }, 1500);
+  return Boolean(res?.ok);
+}
+
+/** Spawn the engine as a detached child of this Next.js process, wait for warmup. */
+async function bootEngine(): Promise<void> {
+  try {
+    const child = spawn("bun", ["run", "start"], {
+      cwd: ENGINE_DIR,
+      detached: true,
+      stdio: ["ignore", engineLogFd, engineLogFd],
+    });
+    child.unref();
+  } catch {
+    // spawn failure — the fail-safe path below handles an unreachable engine
+  }
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (await engineHealthyFast()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+
+/** Self-healing engine supervisor — safe to call on every critical engine use. */
+export async function ensureEngine(): Promise<void> {
+  try {
+    if (await engineHealthyFast()) return;
+    if (!engineBootPromise) {
+      engineBootPromise = bootEngine().finally(() => {
+        engineBootPromise = null;
+      });
+    }
+    await engineBootPromise;
+  } catch {
+    // supervision must never break the caller — fail-safe degradation applies
+  }
+}
 
 export interface EngineHighlightTerm {
   /** shared claim∩statement term from the engine's TF-IDF vocabulary */
@@ -121,6 +175,8 @@ export async function engineHealth(): Promise<{ ok: boolean; kbSize: number }> {
 }
 
 export async function engineAnalyze(text: string, url?: string): Promise<EngineAnalysis> {
+  // critical path: bring the engine up if it was reaped (see SUPERVISION above)
+  await ensureEngine();
   const res = await fetchWithTimeout(
     `${NLP_BASE}/v1/analyze`,
     {

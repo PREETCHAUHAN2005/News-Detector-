@@ -2,8 +2,7 @@
  * GET /api/analytics — operations dashboards (BR-16) + fairness reports (BR-17).
  */
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { TAXONOMY } from "@/lib/taxonomy";
 
@@ -46,8 +45,8 @@ function latenciesOf(rows: { latencyMs: number | null }[]): number[] {
 
 export async function GET(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    const user = await getSessionUser();
+    if (!user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
