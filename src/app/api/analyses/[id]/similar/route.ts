@@ -19,6 +19,8 @@ export const dynamic = "force-dynamic";
 const MAX_CANDIDATES = 400;
 const TOP_N = 3;
 const MIN_SIM = 0.3;
+const MAX_CLAIM_PRECEDENTS = 8;
+const CLAIM_TOP_N = 2;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -30,7 +32,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     const analysis = await db.analysis.findUnique({
       where: { id },
-      select: { id: true, inputText: true },
+      select: {
+        id: true,
+        inputText: true,
+        claims: {
+          orderBy: { position: "asc" },
+          select: { id: true, position: true, text: true, assessable: true },
+        },
+      },
     });
     if (!analysis) {
       return NextResponse.json({ error: "Analysis not found" }, { status: 404 });
@@ -83,23 +92,62 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
     // enrich with the candidate metadata (similarity comes from the engine)
     const byId = new Map(candidates.map((c) => [c.claimId, c]));
-    const enriched = matches
-      .map((m) => {
-        const meta = m.claimId ? byId.get(m.claimId) : undefined;
-        if (!meta) return null;
-        return {
-          claimId: meta.claimId,
-          analysisId: meta.analysisId,
-          text: meta.text,
-          finalLabel: meta.finalLabel,
-          similarity: typeof m.similarity === "number" ? m.similarity : 0,
-          reviewedAt: meta.reviewedAt,
-          reviewerName: meta.reviewerName,
-        };
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null);
+    const enrich = (list: Awaited<ReturnType<typeof engineSimilarList>>) =>
+      list
+        .map((m) => {
+          const meta = m.claimId ? byId.get(m.claimId) : undefined;
+          if (!meta) return null;
+          return {
+            claimId: meta.claimId,
+            analysisId: meta.analysisId,
+            text: meta.text,
+            finalLabel: meta.finalLabel,
+            similarity: typeof m.similarity === "number" ? m.similarity : 0,
+            reviewedAt: meta.reviewedAt,
+            reviewerName: meta.reviewerName,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
 
-    return NextResponse.json({ matches: enriched, checkedCount: candidates.length });
+    const enriched = enrich(matches);
+
+    // Per-claim precedent sweep (multi-claim inputs): each assessable claim is
+    // compared against the same human-ruled corpus so reviewers see which
+    // specific claim the precedent supports. Advisory only, same as above.
+    const assessableClaims = analysis.claims
+      .filter((c) => c.assessable)
+      .slice(0, MAX_CLAIM_PRECEDENTS);
+    const claimMatches: {
+      claimId: string;
+      position: number;
+      text: string;
+      matches: NonNullable<(typeof enriched)[number]>[];
+    }[] = [];
+    if (assessableClaims.length > 1) {
+      for (const claim of assessableClaims) {
+        const claimMatchList = await engineSimilarList(
+          claim.text,
+          candidates,
+          CLAIM_TOP_N,
+          MIN_SIM
+        );
+        const enrichedClaimMatches = enrich(claimMatchList);
+        if (enrichedClaimMatches.length > 0) {
+          claimMatches.push({
+            claimId: claim.id,
+            position: claim.position,
+            text: claim.text,
+            matches: enrichedClaimMatches,
+          });
+        }
+      }
+    }
+
+    return NextResponse.json({
+      matches: enriched,
+      checkedCount: candidates.length,
+      claimMatches,
+    });
   } catch (error) {
     console.error("similar-analyses-error", error);
     return NextResponse.json({ error: "Failed to fetch similar analyses" }, { status: 500 });

@@ -48,6 +48,13 @@ const DEMO_ACCOUNTS: DemoAccount[] = [
     description: "Full access — manages the trusted-source registry and the audit log.",
     badgeClass: "text-rose-400 border-rose-500/40 bg-rose-500/10",
   },
+  {
+    name: "Sam Rivera",
+    role: "Viewer",
+    email: "viewer@veritas.io",
+    description: "Read-only observation — follows the queue, verdicts and analytics.",
+    badgeClass: "text-teal-400 border-teal-500/40 bg-teal-500/10",
+  },
 ];
 
 export function SignInView() {

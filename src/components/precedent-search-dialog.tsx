@@ -11,7 +11,7 @@
  */
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Loader2, Scale, Search, ShieldQuestion } from "lucide-react";
+import { Loader2, Scale, Search, ShieldQuestion, Sparkles } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -31,6 +31,8 @@ export function PrecedentSearchDialog() {
   const open = useAppStore((s) => s.precedentSearchOpen);
   const setOpen = useAppStore((s) => s.setPrecedentSearchOpen);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const setComposerPrefill = useAppStore((s) => s.setComposerPrefill);
+  const setView = useAppStore((s) => s.setView);
   const { toast } = useToast();
 
   const [text, setText] = useState("");
@@ -61,6 +63,13 @@ export function PrecedentSearchDialog() {
 
   const trimmed = text.trim();
   const canSearch = trimmed.length >= 3 && !searchMutation.isPending;
+
+  /** Hand the statement to the evidence composer instead of searching again. */
+  function analyzeInstead(): void {
+    setComposerPrefill(trimmed);
+    setOpen(false);
+    setView("home");
+  }
 
   return (
     <Dialog
@@ -112,6 +121,18 @@ export function PrecedentSearchDialog() {
               Matched by the same similarity channel as verdict reuse (BR-08), at an advisory
               threshold.
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={analyzeInstead}
+              disabled={trimmed.length < 3}
+              title="Send this statement to the evidence composer"
+              className="h-8 shrink-0 gap-1.5 border-zinc-700 bg-zinc-900/60 text-xs text-zinc-300 hover:border-emerald-500/40 hover:text-emerald-300"
+            >
+              <Sparkles className="size-3.5" aria-hidden />
+              Analyze instead
+            </Button>
             <Button
               type="submit"
               size="sm"

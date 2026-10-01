@@ -43,6 +43,11 @@ interface AppState {
   /** precedent search dialog (palette action + g p hotkey + composer link) */
   precedentSearchOpen: boolean;
   setPrecedentSearchOpen: (open: boolean) => void;
+  /** one-shot composer prefill (precedent dialog → "analyze this instead");
+   *  TTL-based like reviewPreset so the framer-motion view remount can't
+   *  swallow it, and genuine later visits don't inherit stale text. */
+  composerPrefill: { text: string; at: number } | null;
+  setComposerPrefill: (text: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -61,4 +66,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({ reviewPreset: preset ? { ...preset, at: Date.now() } : null }),
   precedentSearchOpen: false,
   setPrecedentSearchOpen: (open) => set({ precedentSearchOpen: open }),
+  composerPrefill: null,
+  setComposerPrefill: (text) =>
+    set({ composerPrefill: text ? { text, at: Date.now() } : null }),
 }));

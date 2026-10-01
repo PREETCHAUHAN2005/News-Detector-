@@ -63,6 +63,8 @@ export function fetchAnalyses(params: {
   highImpact?: string;
   /** fairness drill-down (BR-17): exact topic match */
   topic?: string;
+  /** queue ordering: newest (default) | oldest | high_impact */
+  sort?: string;
   page?: number;
   pageSize?: number;
 }) {
@@ -72,6 +74,7 @@ export function fetchAnalyses(params: {
   if (params.q) search.set("q", params.q);
   if (params.highImpact) search.set("highImpact", params.highImpact);
   if (params.topic) search.set("topic", params.topic);
+  if (params.sort) search.set("sort", params.sort);
   search.set("page", String(params.page ?? 1));
   search.set("pageSize", String(params.pageSize ?? 20));
   return jsonFetch<AnalysesListResponse>(`/api/analyses?${search.toString()}`);
@@ -97,6 +100,13 @@ export interface SimilarAnalysesResponse {
   matches: SimilarClaimDTO[];
   /** how many human-verified claims were checked — powers the reassurance note */
   checkedCount: number;
+  /** per-claim precedent groups (multi-claim inputs only; advisory) */
+  claimMatches?: {
+    claimId: string;
+    position: number;
+    text: string;
+    matches: SimilarClaimDTO[];
+  }[];
 }
 
 export function fetchSimilarAnalyses(id: string) {

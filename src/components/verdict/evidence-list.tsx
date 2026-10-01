@@ -143,7 +143,7 @@ export function EvidenceCard({
   const topTerms = highlightDetails.slice(0, 4);
 
   async function copyCitation(event: React.MouseEvent<HTMLButtonElement>): Promise<void> {
-    // the card itself is a link — keep the click on the button local
+    // the overlay button sits above the anchor card — keep the click local
     event.preventDefault();
     event.stopPropagation();
     try {
@@ -156,19 +156,20 @@ export function EvidenceCard({
   }
 
   return (
-    <a
-      href={evidence.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={cn(
-        "group block rounded-lg border border-zinc-800 border-l-2 bg-zinc-900/70 p-3.5 pl-4 transition-all duration-200",
-        "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/90 hover:shadow-lg hover:shadow-black/25",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:translate-y-0 active:scale-[0.99]",
-        RATING_ACCENT[evidence.kbRating] ?? "border-l-zinc-600",
-        compact && "p-3"
-      )}
-      aria-label={`Evidence ${evidence.rank}: ${evidence.title}`}
-    >
+    <div className="group relative">
+      <a
+        href={evidence.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cn(
+          "block rounded-lg border border-zinc-800 border-l-2 bg-zinc-900/70 p-3.5 pl-4 transition-all duration-200",
+          "hover:-translate-y-0.5 hover:border-zinc-700 hover:bg-zinc-900/90 hover:shadow-lg hover:shadow-black/25",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 active:translate-y-0 active:scale-[0.99]",
+          RATING_ACCENT[evidence.kbRating] ?? "border-l-zinc-600",
+          compact && "p-3"
+        )}
+        aria-label={`Evidence ${evidence.rank}: ${evidence.title}`}
+      >
       <div className="mb-1.5 flex items-start justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
@@ -187,19 +188,8 @@ export function EvidenceCard({
           </span>
         </div>
         <span className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={(e) => void copyCitation(e)}
-            title="Copy citation"
-            aria-label={`Copy citation for evidence ${evidence.rank}`}
-            className="rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-emerald-400 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50 group-hover:opacity-100"
-          >
-            {copied ? (
-              <Check className="size-3.5 text-emerald-400" aria-hidden />
-            ) : (
-              <Copy className="size-3.5" aria-hidden />
-            )}
-          </button>
+          {/* spacer reserves the overlay copy-button's slot (layout stability) */}
+          <span className="inline-block size-6" aria-hidden />
           <ExternalLink
             className="size-3.5 text-zinc-600 transition-colors group-hover:text-emerald-400"
             aria-hidden
@@ -304,7 +294,22 @@ export function EvidenceCard({
           )}
         </p>
       )}
-    </a>
+      </a>
+      {/* copy citation — overlay sibling (valid HTML: never a button inside the anchor) */}
+      <button
+        type="button"
+        onClick={(e) => void copyCitation(e)}
+        title="Copy citation"
+        aria-label={`Copy citation for evidence ${evidence.rank}`}
+        className="absolute right-2.5 top-2.5 z-10 rounded p-1 text-zinc-600 opacity-0 transition-all hover:bg-zinc-800 hover:text-emerald-400 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50 group-hover:opacity-100"
+      >
+        {copied ? (
+          <Check className="size-3.5 text-emerald-400" aria-hidden />
+        ) : (
+          <Copy className="size-3.5" aria-hidden />
+        )}
+      </button>
+    </div>
   );
 }
 

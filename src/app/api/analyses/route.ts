@@ -8,6 +8,18 @@ import { db } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+/** Queue sort modes — newest is the default triage order; the alternatives
+ *  serve reviewer workflows (oldest-first backlog burn-down, high-impact
+ *  risk-first per BR-12). Arrays keep Prisma's multi-field orderBy valid. */
+const SORT_MODES: Record<
+  string,
+  { createdAt?: "asc" | "desc"; highImpact?: "desc" }[]
+> = {
+  newest: [{ createdAt: "desc" }],
+  oldest: [{ createdAt: "asc" }],
+  high_impact: [{ highImpact: "desc" }, { createdAt: "desc" }],
+};
+
 export async function GET(req: Request) {
   try {
     const session = await getServerSession(authOptions);
@@ -22,6 +34,8 @@ export async function GET(req: Request) {
     const topic = searchParams.get("topic") ?? undefined;
     const page = Math.max(1, parseInt(searchParams.get("page") ?? "1", 10) || 1);
     const pageSize = Math.min(50, parseInt(searchParams.get("pageSize") ?? "20", 10) || 20);
+    const sortParam = searchParams.get("sort") ?? "newest";
+    const orderBy = SORT_MODES[sortParam] ?? SORT_MODES.newest;
 
     const where: Record<string, unknown> = {};
     if (status && status !== "all") where.status = status;
@@ -38,7 +52,7 @@ export async function GET(req: Request) {
     const [analyses, total] = await Promise.all([
       db.analysis.findMany({
         where,
-        orderBy: { createdAt: "desc" },
+        orderBy,
         skip: (page - 1) * pageSize,
         take: pageSize,
         include: {

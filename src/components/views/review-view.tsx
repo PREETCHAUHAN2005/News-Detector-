@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { motion } from "framer-motion";
 import { BookmarkCheck, Check, ChevronLeft, ChevronRight, Clock, CopyPlus, Download, Eye, FolderSearch, Gavel, Inbox, Layers, Loader2, MousePointerClick, RotateCw, Search, ShieldAlert, ShieldCheck, Tag, UserRound, X } from "lucide-react";
+import { ArrowUpDown } from "lucide-react";
 
 import { fetchAnalyses } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
@@ -50,6 +51,12 @@ const STATUS_OPTIONS: { value: string; label: string }[] = [
   { value: "appealed", label: "Appealed" },
 ];
 
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "high_impact", label: "High-impact first" },
+];
+
 /* ── Saved filters (localStorage) ─────────────────────────────────────
  * ReviewView only mounts client-side after the session check, so reading
  * localStorage during the initial render is hydration-safe. Writes happen
@@ -61,6 +68,7 @@ interface SavedFilters {
   status: string;
   label: string;
   highImpactOnly: boolean;
+  sort: string;
 }
 
 const DEFAULT_FILTERS: SavedFilters = {
@@ -68,6 +76,7 @@ const DEFAULT_FILTERS: SavedFilters = {
   status: "all",
   label: "all",
   highImpactOnly: false,
+  sort: "newest",
 };
 
 function loadSavedFilters(): SavedFilters {
@@ -85,6 +94,10 @@ function loadSavedFilters(): SavedFilters {
           : "all",
       label: typeof p.label === "string" && ALL_LABELS.includes(p.label as never) ? p.label : "all",
       highImpactOnly: p.highImpactOnly === true,
+      sort:
+        typeof p.sort === "string" && SORT_OPTIONS.some((o) => o.value === p.sort)
+          ? p.sort
+          : "newest",
     };
   } catch {
     return DEFAULT_FILTERS;
@@ -134,10 +147,11 @@ export function ReviewView() {
       : saved.label
   );
   const [highImpactOnly, setHighImpactOnly] = useState(saved.highImpactOnly);
+  const [sort, setSort] = useState(saved.sort);
   const [page, setPage] = useState(1);
   /** keyboard-selected row (j/k) — null until the first keypress */
   const [selected, setSelected] = useState<number | null>(null);
-  const cardRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   // debounce the search box (~300ms); typing always restarts pagination
   useEffect(() => {
@@ -150,8 +164,8 @@ export function ReviewView() {
 
   // persist the active filter set (storage write only — never sets state)
   useEffect(() => {
-    saveFilters({ search, status, label, highImpactOnly });
-  }, [search, status, label, highImpactOnly]);
+    saveFilters({ search, status, label, highImpactOnly, sort });
+  }, [search, status, label, highImpactOnly, sort]);
 
   const filters = useMemo(
     () => ({
@@ -160,10 +174,11 @@ export function ReviewView() {
       q: debounced || undefined,
       highImpact: highImpactOnly ? "true" : undefined,
       topic: topicFilter ?? undefined,
+      sort,
       page,
       pageSize: PAGE_SIZE,
     }),
-    [status, label, debounced, highImpactOnly, topicFilter, page]
+    [status, label, debounced, highImpactOnly, topicFilter, sort, page]
   );
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
@@ -212,7 +227,8 @@ export function ReviewView() {
         });
       } else if (key === "enter" || key === "o") {
         if (clampedSelected === null) return;
-        // if an actual button is focused, let its native click open instead
+        // if a real button is focused (e.g. a card's copy button), let its
+        // native activation run instead of opening the dossier
         if (target instanceof HTMLElement && target.tagName === "BUTTON") return;
         event.preventDefault();
         const analysis = analyses[clampedSelected];
@@ -235,7 +251,8 @@ export function ReviewView() {
     setPage(currentPage);
   }
 
-  const hasActiveFilters = debounced !== "" || status !== "all" || label !== "all" || highImpactOnly || topicFilter !== null;
+  const hasActiveFilters =
+    debounced !== "" || status !== "all" || label !== "all" || highImpactOnly || topicFilter !== null || sort !== "newest";
 
   /* ── CSV export (BR-13 governance) ────────────────────────────────────
    * Exports the CURRENT filter's result set (up to EXPORT_CAP rows) with the
@@ -382,7 +399,10 @@ export function ReviewView() {
             <SelectTrigger
               size="sm"
               aria-label="Filter by status"
-              className="w-[150px] border-zinc-800 bg-zinc-900/60 text-xs text-zinc-300"
+              className={cn(
+                "w-[150px] border-zinc-800 bg-zinc-900/60 text-xs transition-colors",
+                status !== "all" ? "border-emerald-500/40 text-emerald-300" : "text-zinc-300"
+              )}
             >
               <SelectValue placeholder="Status" />
             </SelectTrigger>
@@ -399,7 +419,10 @@ export function ReviewView() {
             <SelectTrigger
               size="sm"
               aria-label="Filter by verdict label"
-              className="w-[160px] border-zinc-800 bg-zinc-900/60 text-xs text-zinc-300"
+              className={cn(
+                "w-[160px] border-zinc-800 bg-zinc-900/60 text-xs transition-colors",
+                label !== "all" ? "border-emerald-500/40 text-emerald-300" : "text-zinc-300"
+              )}
             >
               <SelectValue placeholder="Verdict" />
             </SelectTrigger>
@@ -408,6 +431,27 @@ export function ReviewView() {
               {ALL_LABELS.map((l) => (
                 <SelectItem key={l} value={l}>
                   {LABEL_META[l].short}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={sort} onValueChange={(v) => { setSort(v); setPage(1); }}>
+            <SelectTrigger
+              size="sm"
+              aria-label="Sort order"
+              className={cn(
+                "w-[164px] gap-1.5 border-zinc-800 bg-zinc-900/60 text-xs transition-colors",
+                sort !== "newest" ? "border-emerald-500/40 text-emerald-300" : "text-zinc-300"
+              )}
+            >
+              <ArrowUpDown className={cn("size-3", sort !== "newest" ? "text-emerald-400/80" : "text-zinc-500")} aria-hidden />
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent className="border-zinc-800 bg-zinc-900">
+              {SORT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -532,6 +576,7 @@ export function ReviewView() {
                   setStatus("all");
                   setLabel("all");
                   setHighImpactOnly(false);
+                  setSort("newest");
                   setTopicFilter(null);
                   setPage(1);
                   saveFilters(DEFAULT_FILTERS);
@@ -605,7 +650,7 @@ function QueueCard({
   analysis: AnalysisDTO;
   index: number;
   selected: boolean;
-  cardRef: (el: HTMLButtonElement | null) => void;
+  cardRef: (el: HTMLDivElement | null) => void;
   onOpen: () => void;
 }) {
   const claims = analysis.claims;
@@ -615,10 +660,18 @@ function QueueCard({
   const accent = STATUS_ACCENT[analysis.status] ?? "bg-zinc-600";
 
   return (
-    <motion.button
+    <motion.div
       ref={cardRef}
-      type="button"
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(event) => {
+        // div-with-role activation (native buttons fire click themselves)
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: Math.min(index * 0.04, 0.3), ease: "easeOut" }}
@@ -683,12 +736,12 @@ function QueueCard({
       </div>
 
       {/* row 2 — input text */}
-      <p className="mt-2.5 line-clamp-2 text-sm leading-relaxed text-zinc-300">
+      <p className="mt-3 line-clamp-2 text-sm leading-relaxed text-zinc-300">
         {analysis.inputText}
       </p>
 
       {/* row 3 — meta strip */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-zinc-500">
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-zinc-800/60 pt-2.5 text-[11px] text-zinc-500">
         <span className="inline-flex items-center gap-1">
           <Layers className="size-3" aria-hidden />
           {claims.length} {claims.length === 1 ? "claim" : "claims"} · {assessableCount}{" "}
@@ -721,7 +774,7 @@ function QueueCard({
         className="absolute right-3 top-1/2 hidden -translate-y-1/2 text-zinc-600 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:text-emerald-400 group-hover:opacity-100 sm:block"
         aria-hidden
       />
-    </motion.button>
+    </motion.div>
   );
 }
 

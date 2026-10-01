@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { signOut, useSession } from "next-auth/react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Keyboard, Loader2, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
+import { ChevronDown, Keyboard, Loader2, LogIn, LogOut, Menu, Search, Settings2, ShieldAlert } from "lucide-react";
 import { fetchModelCard } from "@/lib/api";
 import { ROLE_DISPLAY } from "@/lib/taxonomy";
 import { useAppStore } from "@/lib/store";
@@ -136,39 +136,49 @@ export function AppTopbar({ title }: { title: string }) {
           <ChevronDown className="size-3 opacity-60" aria-hidden />
         </span>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-zinc-800/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
-              aria-label="Account menu"
-            >
-              <Avatar className="size-7 border border-zinc-700">
-                <AvatarFallback className="bg-zinc-800 text-[11px] font-semibold text-emerald-400">
-                  {initials}
-                </AvatarFallback>
-              </Avatar>
-              <span className="hidden text-[13px] text-zinc-300 md:inline">{user?.name}</span>
-              <ChevronDown className="size-3.5 text-zinc-500" aria-hidden />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52 border-zinc-800 bg-zinc-900">
-            <DropdownMenuLabel className="font-normal">
-              <p className="text-sm text-zinc-200">{user?.name}</p>
-              <p className="text-xs text-zinc-500">{user?.email}</p>
-              <p className="mt-1 inline-block rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-                {ROLE_DISPLAY[user?.role ?? "viewer"] ?? user?.role}
-              </p>
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator className="bg-zinc-800" />
-            <DropdownMenuItem
-              onClick={() => signOut({ callbackUrl: "/" })}
-              className="text-zinc-400 focus:text-zinc-100"
-            >
-              <LogOut className="size-4" aria-hidden />
-              Sign out
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {authenticated ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-zinc-800/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500/50"
+                aria-label="Account menu"
+              >
+                <Avatar className="size-7 border border-zinc-700">
+                  <AvatarFallback className="bg-zinc-800 text-[11px] font-semibold text-emerald-400">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="hidden text-[13px] text-zinc-300 md:inline">{user?.name}</span>
+                <ChevronDown className="size-3.5 text-zinc-500" aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52 border-zinc-800 bg-zinc-900">
+              <DropdownMenuLabel className="font-normal">
+                <p className="text-sm text-zinc-200">{user?.name}</p>
+                <p className="text-xs text-zinc-500">{user?.email}</p>
+                <p className="mt-1 inline-block rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                  {ROLE_DISPLAY[user?.role ?? "viewer"] ?? user?.role}
+                </p>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator className="bg-zinc-800" />
+              <DropdownMenuItem
+                onClick={() => signOut({ callbackUrl: "/" })}
+                className="text-zinc-400 focus:text-zinc-100"
+              >
+                <LogOut className="size-4" aria-hidden />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <span
+            className="hidden items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[11px] text-zinc-500 sm:flex"
+            title="Sign in to access the workbench"
+          >
+            <LogIn className="size-3" aria-hidden />
+            Sign in to continue
+          </span>
+        )}
       </div>
     </header>
   );

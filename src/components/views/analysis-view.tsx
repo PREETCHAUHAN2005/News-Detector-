@@ -342,6 +342,8 @@ function PrecedentPanel({ analysisId }: { analysisId: string }) {
 
   const matches = data?.matches ?? [];
   const checked = data?.checkedCount ?? 0;
+  const claimGroups = data?.claimMatches ?? [];
+  const hasAny = matches.length > 0 || claimGroups.length > 0;
 
   return (
     <motion.section
@@ -367,20 +369,49 @@ function PrecedentPanel({ analysisId }: { analysisId: string }) {
           </span>
         </div>
 
-        {matches.length === 0 ? (
+        {hasAny ? (
+          <div>
+            {/* per-claim groups — which specific claim does each precedent support */}
+            {claimGroups.length > 0 && (
+              <ul className="divide-y divide-zinc-800/70" aria-label="Precedent by claim">
+                {claimGroups.map((group) => (
+                  <li key={group.claimId} className="px-4 py-3">
+                    <p className="mb-1 flex items-baseline gap-2">
+                      <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                        #{String(group.position).padStart(2, "0")}
+                      </span>
+                      <span className="line-clamp-1 min-w-0 text-xs text-zinc-400" title={group.text}>
+                        {group.text}
+                      </span>
+                    </p>
+                    <ul>
+                      {group.matches.map((match) => (
+                        <li key={match.claimId}>
+                          <PrecedentRow match={match} onOpen={openAnalysis} />
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {/* whole-input matches — shown only when not already covered per-claim */}
+            {matches.length > 0 && claimGroups.length === 0 && (
+              <ul className="divide-y divide-zinc-800/70">
+                {matches.map((match) => (
+                  <li key={match.claimId}>
+                    <PrecedentRow match={match} onOpen={openAnalysis} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ) : (
           <p className="px-4 py-3.5 text-xs leading-relaxed text-zinc-500">
             No similar precedent above the advisory floor — this claim does not closely match
             any of the {checked.toLocaleString()} human-verified claims on record. The stricter
             BR-08 near-duplicate reuse gate also did not fire.
           </p>
-        ) : (
-          <ul className="divide-y divide-zinc-800/70">
-            {matches.map((match) => (
-              <li key={match.claimId}>
-                <PrecedentRow match={match} onOpen={openAnalysis} />
-              </li>
-            ))}
-          </ul>
         )}
         <p className="border-t border-zinc-800/80 px-4 py-2.5 text-[10px] leading-relaxed text-zinc-600">
           Advisory only — precedents inform consistency but never change this verdict. Verdict

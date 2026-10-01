@@ -3,7 +3,7 @@
  * HomeView — the Cursor-style homescreen: greeting, evidence-verification
  * composer, known fact-check suggestions, recent analyses and the safety strip.
  */
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useSession } from "next-auth/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -52,6 +52,11 @@ function hintClass(hint: string): string {
   return "text-zinc-500";
 }
 
+/** Composer prefill TTL — matches the review-preset window (Task-16 lesson:
+ *  framer-motion briefly remounts the entering view, so one-shot state must
+ *  survive ~300ms and expire for genuine later visits). */
+const PREFILL_TTL_MS = 8000;
+
 export function HomeView() {
   const { data: session } = useSession();
   const { toast } = useToast();
@@ -64,6 +69,35 @@ export function HomeView() {
   const [text, setText] = useState("");
   const [mode, setMode] = useState<Mode>("Claim");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /* Composer prefill (precedent-dialog "Analyze instead" hand-off).
+   * Covers BOTH mount and already-on-home cases: the zustand subscription
+   * re-renders HomeView when the prefill lands, and the render-phase state
+   * adjustment (React docs pattern — same as the review-queue page clamp)
+   * applies it without an effect. */
+  const prefill = useAppStore((s) => s.composerPrefill);
+  const [appliedPrefillAt, setAppliedPrefillAt] = useState<number | null>(null);
+  const pendingFocusRef = useRef(false);
+  const freshPrefill =
+    prefill && Date.now() - prefill.at < PREFILL_TTL_MS ? prefill : null;
+  if (freshPrefill && freshPrefill.at !== appliedPrefillAt) {
+    setAppliedPrefillAt(freshPrefill.at);
+    setText(freshPrefill.text);
+    pendingFocusRef.current = true;
+  }
+
+  // Focus the composer + place the caret at the end once a prefill commits
+  // (DOM side effect only — never sets component state).
+  useEffect(() => {
+    if (!pendingFocusRef.current) return;
+    pendingFocusRef.current = false;
+    document.getElementById("main-content")?.scrollTo({ top: 0 });
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+    }
+  }, [text, appliedPrefillAt]);
 
   const suggestionsQuery = useQuery({
     queryKey: ["suggestions"],
@@ -220,7 +254,7 @@ export function HomeView() {
           <form onSubmit={handleSubmit}>
             <div
               className={cn(
-                "overflow-hidden rounded-xl border bg-zinc-900/50 transition-all duration-200",
+                "overflow-hidden rounded-xl border bg-zinc-900/70 transition-all duration-200",
                 "border-zinc-800 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]",
                 "focus-within:border-emerald-500/40 focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03),0_0_28px_-8px_rgba(16,185,129,0.35)]"
               )}

@@ -672,10 +672,10 @@ export function AnalyticsView() {
             </div>
             <ul className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
               {donutData.map((d) => (
-                <li key={d.label} className="flex items-center gap-1.5 text-[11px] text-zinc-400" title={LABEL_META[d.label].description}>
+                <li key={d.label} className="flex items-center gap-1.5 text-[11.5px] font-medium text-zinc-300" title={LABEL_META[d.label].description}>
                   <span className="size-2 rounded-full" style={{ background: LABEL_HEX[d.label] }} aria-hidden />
                   {LABEL_META[d.label].short}
-                  <span className="font-mono tabular-nums text-zinc-500">{d.value}</span>
+                  <span className="font-mono tabular-nums text-zinc-400">{d.value}</span>
                 </li>
               ))}
             </ul>
@@ -735,7 +735,7 @@ export function AnalyticsView() {
                       />
                     )}
                   />
-                  <Bar dataKey="total" name="Analyses" fill="#3f3f46" fillOpacity={0.4} radius={[3, 3, 0, 0]} maxBarSize={26} />
+                  <Bar dataKey="total" name="Analyses" fill="#52525b" fillOpacity={0.45} radius={[3, 3, 0, 0]} maxBarSize={26} />
                   <Bar dataKey="contradicted" name="Contradicted" fill={LABEL_HEX[TAXONOMY.CONTRADICTED]} radius={[3, 3, 0, 0]} maxBarSize={26} />
                 </BarChart>
               </ResponsiveContainer>
